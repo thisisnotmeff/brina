@@ -1,0 +1,427 @@
+#include "PluginEditor.h"
+
+using namespace brina;
+
+//==============================================================================
+BrinaLookAndFeel::BrinaLookAndFeel()
+{
+    setColour (juce::ResizableWindow::backgroundColourId, ui::background);
+    setColour (juce::Slider::textBoxTextColourId, ui::text);
+    setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+    setColour (juce::Label::textColourId, ui::dim);
+    setColour (juce::TextButton::buttonColourId, ui::panel);
+    setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffc8443c));
+    setColour (juce::TextButton::textColourOffId, ui::text);
+    setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    setColour (juce::ComboBox::backgroundColourId, ui::background);
+    setColour (juce::ComboBox::outlineColourId, ui::outline);
+    setColour (juce::ComboBox::textColourId, ui::text);
+    setColour (juce::ComboBox::arrowColourId, ui::dim);
+    setColour (juce::PopupMenu::backgroundColourId, ui::panel);
+    setColour (juce::PopupMenu::textColourId, ui::text);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, ui::accent.withAlpha (0.25f));
+    setColour (juce::ToggleButton::textColourId, ui::text);
+    setColour (juce::ToggleButton::tickColourId, ui::accent);
+    setColour (juce::ToggleButton::tickDisabledColourId, ui::dim);
+}
+
+void BrinaLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
+                                         float startAngle, float endAngle, juce::Slider& slider)
+{
+    const auto area = juce::Rectangle<int> (x, y, w, h).toFloat().reduced (4.0f);
+    const float radius = juce::jmin (area.getWidth(), area.getHeight()) * 0.5f - 2.0f;
+    const auto centre = area.getCentre();
+    const float angle = startAngle + pos * (endAngle - startAngle);
+    const float stroke = 3.0f;
+
+    juce::Path track;
+    track.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
+    g.setColour (ui::outline);
+    g.strokePath (track, juce::PathStrokeType (stroke, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // i parametri bipolari (pitch, scan...) partono dal centro
+    const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
+    const float from = bipolar ? startAngle + (float) slider.valueToProportionOfLength (0.0) * (endAngle - startAngle)
+                               : startAngle;
+    juce::Path value;
+    value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, juce::jmin (from, angle), juce::jmax (from, angle), true);
+    g.setColour (slider.isEnabled() ? ui::accent : ui::dim);
+    g.strokePath (value, juce::PathStrokeType (stroke, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    const auto tip = centre.getPointOnCircumference (radius - 7.0f, angle);
+    g.setColour (ui::text);
+    g.drawLine ({ centre.getPointOnCircumference (radius * 0.35f, angle), tip }, 2.0f);
+}
+
+//==============================================================================
+WaveformView::WaveformView (BrinaProcessor& p) : proc (p)
+{
+    setMouseCursor (juce::MouseCursor::CrosshairCursor);
+}
+
+void WaveformView::refresh()
+{
+    auto now = proc.getSample();
+    const int length = now != nullptr ? now->length.load() : 0;
+
+    if (now != sample || length != lastLength)
+    {
+        sample = now;
+        lastLength = length;
+        rebuildPeaks();
+    }
+
+    repaint();
+}
+
+void WaveformView::rebuildPeaks()
+{
+    const int width = juce::jmax (1, getWidth());
+    peakMin.assign ((size_t) width, 0.0f);
+    peakMax.assign ((size_t) width, 0.0f);
+
+    if (sample == nullptr || lastLength <= 0)
+        return;
+
+    const int length = juce::jmin (lastLength, sample->buffer.getNumSamples());
+    const float* l = sample->buffer.getReadPointer (0);
+    const float* r = sample->buffer.getReadPointer (1);
+    const double perPixel = (double) length / width;
+    const int stride = juce::jmax (1, (int) (perPixel / 96.0));
+
+    for (int x = 0; x < width; ++x)
+    {
+        const int a = (int) (x * perPixel);
+        const int b = juce::jmin (length, juce::jmax (a + 1, (int) ((x + 1) * perPixel)));
+        float lo = 0.0f, hi = 0.0f;
+
+        for (int i = a; i < b; i += stride)
+        {
+            const float v = 0.5f * (l[i] + r[i]);
+            lo = juce::jmin (lo, v);
+            hi = juce::jmax (hi, v);
+        }
+
+        peakMin[(size_t) x] = lo;
+        peakMax[(size_t) x] = hi;
+    }
+}
+
+void WaveformView::paint (juce::Graphics& g)
+{
+    const auto area = getLocalBounds().toFloat();
+    g.setColour (ui::panel);
+    g.fillRoundedRectangle (area, 6.0f);
+
+    const float w = area.getWidth(), h = area.getHeight(), mid = h * 0.5f;
+    const bool empty = sample == nullptr || lastLength <= 0;
+
+    if (empty)
+    {
+        g.setColour (ui::dim);
+        g.setFont (15.0f);
+        g.drawFittedText (BrinaProcessor::hasAudioInput()
+                              ? "Trascina qui un file audio, premi Load, oppure Rec per registrare l'ingresso della traccia"
+                              : "Trascina qui un file audio oppure premi Load",
+                          getLocalBounds().reduced (20), juce::Justification::centred, 2);
+    }
+    else
+    {
+        const float position = proc.apvts.getRawParameterValue ("position")->load();
+        const float spray = proc.apvts.getRawParameterValue ("spray")->load();
+        const float centre = position + proc.engine.scanVis.load();
+        const float cx = (centre - std::floor (centre)) * w;
+        const float half = spray * spray * 0.5f * w;
+
+        // zona da cui nascono i grani
+        g.setColour (ui::accent.withAlpha (0.10f));
+        for (float offset : { -w, 0.0f, w })
+            g.fillRect (juce::Rectangle<float> (cx - half + offset, 0.0f, half * 2.0f, h).getIntersection (area));
+
+        g.setColour (ui::accent.withAlpha (0.55f));
+        for (size_t x = 0; x < peakMax.size(); ++x)
+        {
+            const float top = mid - peakMax[x] * mid * 0.95f;
+            const float bottom = mid - peakMin[x] * mid * 0.95f;
+            g.fillRect ((float) x, top, 1.0f, juce::jmax (1.0f, bottom - top));
+        }
+
+        g.setColour (ui::warm);
+        for (auto& slot : proc.engine.grainVis)
+        {
+            const float p = slot.load (std::memory_order_relaxed);
+            if (p >= 0.0f)
+                g.fillRect (p * w - 1.0f, 6.0f, 2.0f, h - 12.0f);
+        }
+
+        g.setColour (juce::Colours::white);
+        g.fillRect (cx - 0.75f, 0.0f, 1.5f, h);
+    }
+
+    if (dragHover)
+    {
+        g.setColour (ui::accent);
+        g.drawRoundedRectangle (area.reduced (1.0f), 6.0f, 2.0f);
+    }
+}
+
+void WaveformView::setPositionFromMouse (const juce::MouseEvent& e)
+{
+    if (auto* param = proc.apvts.getParameter ("position"))
+    {
+        // tolgo lo scorrimento automatico (Scan), cosi' il cursore finisce dove si clicca
+        float v = (float) e.x / (float) juce::jmax (1, getWidth()) - proc.engine.scanVis.load();
+        v -= std::floor (v);
+        param->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, v));
+    }
+}
+
+void WaveformView::mouseDown (const juce::MouseEvent& e)
+{
+    if (auto* param = proc.apvts.getParameter ("position"))
+        param->beginChangeGesture();
+    setPositionFromMouse (e);
+}
+
+void WaveformView::mouseDrag (const juce::MouseEvent& e) { setPositionFromMouse (e); }
+
+void WaveformView::mouseUp (const juce::MouseEvent&)
+{
+    if (auto* param = proc.apvts.getParameter ("position"))
+        param->endChangeGesture();
+}
+
+//==============================================================================
+BrinaEditor::BrinaEditor (BrinaProcessor& p)
+    : AudioProcessorEditor (p), proc (p), waveform (p)
+{
+    setLookAndFeel (&lookAndFeel);
+    addAndMakeVisible (waveform);
+
+    addAndMakeVisible (loadButton);
+    loadButton.onClick = [this] { openChooser(); };
+
+    recButton.setClickingTogglesState (false);
+    recButton.onClick = [this]
+    {
+        status = {};
+        if (proc.isRecording()) proc.stopRecording();
+        else                    proc.startRecording();
+    };
+    addChildComponent (recButton);
+    recButton.setVisible (BrinaProcessor::hasAudioInput());
+
+    sampleLabel.setColour (juce::Label::textColourId, ui::text);
+    sampleLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (sampleLabel);
+
+    for (auto [id, title] : std::initializer_list<std::pair<const char*, const char*>> {
+             { "position", "Position" }, { "spray", "Spray" }, { "size", "Size" }, { "density", "Density" },
+             { "pitch", "Pitch" }, { "detune", "Detune" }, { "octaves", "Octaves" }, { "reverse", "Reverse" },
+             { "spread", "Spread" }, { "scan", "Scan" }, { "attack", "Attack" }, { "release", "Release" },
+             { "genProb", "Chance" }, { "genOctave", "Octave" }, { "genRange", "Range" }, { "genLength", "Length" },
+             { "drive", "Drive" }, { "wow", "Wow" }, { "tone", "Tone" },
+             { "delayTime", "Time" }, { "delayFeedback", "Feedback" }, { "delayMix", "Mix" },
+             { "reverbSize", "Size" }, { "reverbDamp", "Damp" }, { "shimmer", "Shimmer" }, { "reverbMix", "Mix" },
+             { "dry", "Dry In" }, { "volume", "Volume" } })
+        addKnob (id, title);
+
+    addChoice ("genRate", "Rate");
+    addChoice ("genRoot", "Root");
+    addChoice ("genScale", "Scale");
+
+    addAndMakeVisible (driftButton);
+    driftAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "genOn", driftButton);
+
+    knobs[26]->slider.setVisible (BrinaProcessor::hasAudioInput());
+    knobs[26]->label.setVisible (BrinaProcessor::hasAudioInput());
+
+    setSize (880, 596);
+    startTimerHz (30);
+}
+
+BrinaEditor::~BrinaEditor()
+{
+    stopTimer();
+    setLookAndFeel (nullptr);
+}
+
+BrinaEditor::Knob& BrinaEditor::addKnob (const char* paramId, const char* title)
+{
+    auto* k = knobs.add (new Knob());
+    k->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    k->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    k->slider.setColour (juce::Slider::textBoxTextColourId, ui::text);
+    k->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 16);
+    k->label.setText (title, juce::dontSendNotification);
+    k->label.setJustificationType (juce::Justification::centred);
+    k->label.setFont (juce::FontOptions (12.0f));
+    addAndMakeVisible (k->slider);
+    addAndMakeVisible (k->label);
+    k->attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, paramId, k->slider);
+    return *k;
+}
+
+BrinaEditor::Choice& BrinaEditor::addChoice (const char* paramId, const char* title)
+{
+    auto* c = choices.add (new Choice());
+
+    if (auto* param = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (paramId)))
+        c->box.addItemList (param->choices, 1);
+
+    c->label.setText (title, juce::dontSendNotification);
+    c->label.setJustificationType (juce::Justification::centred);
+    c->label.setFont (juce::FontOptions (12.0f));
+    addAndMakeVisible (c->box);
+    addAndMakeVisible (c->label);
+    c->attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, paramId, c->box);
+    return *c;
+}
+
+//==============================================================================
+void BrinaEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (ui::background);
+
+    g.setColour (ui::text);
+    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    g.drawText ("BRINA", 16, 8, 100, 30, juce::Justification::centredLeft);
+    g.setColour (ui::dim);
+    g.setFont (juce::FontOptions (12.0f));
+    g.drawText (BrinaProcessor::hasAudioInput() ? "granular fx" : "granular instrument",
+                96, 12, 160, 26, juce::Justification::centredLeft);
+
+    for (auto& s : sections)
+    {
+        g.setColour (ui::panel);
+        g.fillRoundedRectangle (s.bounds.toFloat(), 6.0f);
+        g.setColour (ui::accent);
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (s.title, s.bounds.getX() + 10, s.bounds.getY() + 5, 200, 14, juce::Justification::centredLeft);
+    }
+}
+
+void BrinaEditor::resized()
+{
+    const int margin = 12, gap = 8, sectionHeight = 118;
+    auto area = getLocalBounds().reduced (margin, 0);
+
+    auto header = area.removeFromTop (46).reduced (0, 9);
+    if (recButton.isVisible())
+    {
+        recButton.setBounds (header.removeFromRight (64));
+        header.removeFromRight (gap);
+    }
+    loadButton.setBounds (header.removeFromRight (64));
+    header.removeFromRight (gap);
+    sampleLabel.setBounds (header.removeFromRight (360));
+
+    waveform.setBounds (area.removeFromTop (150));
+    area.removeFromTop (gap);
+
+    sections.clear();
+
+    auto placeKnob = [this] (int index, juce::Rectangle<int> cell)
+    {
+        auto& k = *knobs[index];
+        k.label.setBounds (cell.removeFromTop (14));
+        k.slider.setBounds (cell.reduced (2, 0));
+    };
+
+    auto content = [] (juce::Rectangle<int> section) { return section.withTrimmedTop (22).reduced (6, 4); };
+
+    // --- Grains
+    auto grains = area.removeFromTop (sectionHeight);
+    area.removeFromTop (gap);
+    sections.push_back ({ "GRAINS", grains });
+    {
+        auto row = content (grains);
+        const int cell = row.getWidth() / 12;
+        for (int i = 0; i < 12; ++i)
+            placeKnob (i, row.removeFromLeft (cell));
+    }
+
+    // --- Drift (generatore di note)
+    auto drift = area.removeFromTop (sectionHeight);
+    area.removeFromTop (gap);
+    sections.push_back ({ "DRIFT  -  generative notes", drift });
+    {
+        auto row = content (drift);
+        driftButton.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (60, 24));
+
+        for (auto* c : choices)
+        {
+            auto cell = row.removeFromLeft (130).reduced (8, 0);
+            c->label.setBounds (cell.removeFromTop (14));
+            c->box.setBounds (cell.withSizeKeepingCentre (cell.getWidth(), 26));
+        }
+
+        const int cell = row.getWidth() / 4;
+        for (int i = 12; i < 16; ++i)
+            placeKnob (i, row.removeFromLeft (cell).withSizeKeepingCentre (76, row.getHeight()));
+    }
+
+    // --- Tape / Delay / Reverb / Out
+    auto fx = area.removeFromTop (sectionHeight);
+    const int unit = (fx.getWidth() - 3 * gap) / 12;
+    int knob = 16;
+
+    for (auto [title, count] : std::initializer_list<std::pair<const char*, int>> {
+             { "TAPE", 3 }, { "DELAY", 3 }, { "REVERB", 4 }, { "OUT", 2 } })
+    {
+        auto section = fx.removeFromLeft (unit * count);
+        fx.removeFromLeft (gap);
+        sections.push_back ({ title, section });
+
+        auto row = content (section);
+        const int cell = row.getWidth() / count;
+        for (int i = 0; i < count; ++i)
+            placeKnob (knob++, row.removeFromLeft (cell));
+    }
+}
+
+//==============================================================================
+void BrinaEditor::timerCallback()
+{
+    waveform.refresh();
+
+    const bool rec = proc.isRecording();
+    recButton.setToggleState (rec, juce::dontSendNotification);
+    recButton.setButtonText (rec ? "Stop" : "Rec");
+
+    juce::String text = status;
+
+    if (text.isEmpty())
+        if (auto s = proc.getSample())
+            if (s->length.load() > 0)
+                text = s->name + "   " + juce::String ((double) s->length.load() / s->sampleRate, 1) + " s";
+
+    if (text != sampleLabel.getText())
+        sampleLabel.setText (text, juce::dontSendNotification);
+}
+
+void BrinaEditor::load (const juce::File& file)
+{
+    status = proc.loadFile (file);
+}
+
+void BrinaEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    waveform.dragHover = false;
+    if (! files.isEmpty())
+        load (juce::File (files[0]));
+}
+
+void BrinaEditor::openChooser()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Scegli un file audio", juce::File(), proc.getFormatWildcard());
+
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this] (const juce::FileChooser& fc)
+                          {
+                              const auto file = fc.getResult();
+                              if (file.existsAsFile())
+                                  load (file);
+                          });
+}

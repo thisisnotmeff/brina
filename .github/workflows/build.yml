@@ -1,0 +1,39 @@
+name: Build macOS
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBRINA_INSTALL=OFF -DBRINA_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: |
+          ./build/BrinaTest_artefacts/Release/BrinaTest
+          ./build/BrinaPluginTest_artefacts/Release/BrinaPluginTest "$RUNNER_TEMP"
+          ./build/BrinaFXPluginTest_artefacts/Release/BrinaFXPluginTest "$RUNNER_TEMP"
+
+      - name: Package
+        run: |
+          mkdir -p dist/VST3 dist/Components
+          cp -R build/Brina_artefacts/Release/VST3/*.vst3 build/BrinaFX_artefacts/Release/VST3/*.vst3 dist/VST3/
+          cp -R build/Brina_artefacts/Release/AU/*.component build/BrinaFX_artefacts/Release/AU/*.component dist/Components/
+          for bundle in dist/VST3/*.vst3 dist/Components/*.component; do
+            codesign --force --deep --sign - "$bundle"
+          done
+          cp README.md dist/
+          ditto -c -k --keepParent dist Brina-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Brina-macOS
+          path: Brina-macOS.zip
