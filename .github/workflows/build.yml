@@ -14,7 +14,7 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBRINA_INSTALL=OFF -DBRINA_TESTS=ON
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel 4
 
       - name: Test
         run: |
