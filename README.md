@@ -34,6 +34,14 @@ In Live: Impostazioni > Plug-Ins > attiva VST3 (e/o Audio Units) > *Rescan*.
    (Do3 = intonazione originale). Per mandare MIDI a Brina FX: crea una traccia MIDI e
    imposta *MIDI To* sulla traccia audio.
 3. Clicca sulla forma d'onda per scegliere da dove nascono i grani.
+4. In alto: **Playing / Stopped** avvia e ferma il plugin (da fermo non nascono note ne' grani
+   e le code sfumano da sole); **Kill** fa silenzio subito, azzerando note, grani e code di
+   delay e riverbero. In Brina FX il segnale *Dry In* continua a passare in entrambi i casi.
+5. **Position: Auto / Fixed** (nella sezione Grains): in *Auto* la posizione scorre da sola alla
+   velocita' di *Scan* (come sempre); in *Fixed* resta ferma dove la metti.
+
+I tre comandi sono parametri (*Play*, *Kill*, *Position Mode*), quindi si possono automatizzare
+o mappare a un controller in Live. *Kill* scatta a ogni cambio di valore.
 
 **Grains** - *Position* punto di lettura · *Spray* dispersione attorno al punto · *Size* durata
 del grano · *Density* grani al secondo · *Pitch* trasposizione · *Detune* stonatura casuale ·

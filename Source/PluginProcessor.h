@@ -45,6 +45,9 @@ public:
     void stopRecording();
     bool isRecording() const { return recording.load(); }
 
+    /** Kill: silenzio immediato, azzera note, grani e code degli effetti. */
+    void triggerKill();
+
     brina::SampleData::Ptr getSample();
     juce::String getFormatWildcard() { return formatManager.getWildcardForAllFormats(); }
 
@@ -66,6 +69,7 @@ private:
 
     std::atomic<bool> recording { false };
     double hostSampleRate = 44100.0;
+    bool lastKill = false;              // usato solo dal thread audio
     juce::AudioBuffer<float> inputCopy;
 
     struct Raw
@@ -74,7 +78,8 @@ private:
                            *spread, *scan, *attack, *release,
                            *genOn, *genRate, *genProb, *genRoot, *genScale, *genOctave, *genRange, *genLength,
                            *drive, *wow, *tone, *delayTime, *delayFeedback, *delayMix,
-                           *reverbSize, *reverbDamp, *shimmer, *reverbMix, *dry, *volume;
+                           *reverbSize, *reverbDamp, *shimmer, *reverbMix, *dry, *volume,
+                           *play, *kill, *posMode;
     } raw {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BrinaProcessor)

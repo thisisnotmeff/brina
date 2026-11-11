@@ -212,6 +212,29 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     addChildComponent (recButton);
     recButton.setVisible (BrinaProcessor::hasAudioInput());
 
+    // --- trasporto: Play/Stop (le code sfumano) e Kill (silenzio immediato)
+    playButton.setClickingTogglesState (true);
+    playButton.setColour (juce::TextButton::buttonOnColourId, ui::accent);
+    playButton.setColour (juce::TextButton::textColourOnId, ui::background);
+    playButton.setTooltip ("Start / stop: da fermo non nascono note ne' grani, le code sfumano da sole");
+    addAndMakeVisible (playButton);
+    playAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "play", playButton);
+
+    killButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff7a2a26));
+    killButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+    killButton.setTooltip ("Kill: silenzio immediato, azzera note, grani e code di delay e riverbero");
+    killButton.onClick = [this] { proc.triggerKill(); };
+    addAndMakeVisible (killButton);
+
+    // --- posizione: Auto (scorre con Scan) oppure Fixed (ferma su Position)
+    positionButton.setClickingTogglesState (true);
+    positionButton.setColour (juce::TextButton::buttonColourId, ui::background);
+    positionButton.setColour (juce::TextButton::buttonOnColourId, ui::warm);
+    positionButton.setColour (juce::TextButton::textColourOnId, ui::background);
+    positionButton.setTooltip ("Auto: la posizione scorre da sola (Scan). Fixed: resta ferma dove la metti");
+    addAndMakeVisible (positionButton);
+    positionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "posMode", positionButton);
+
     sampleLabel.setColour (juce::Label::textColourId, ui::text);
     sampleLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (sampleLabel);
@@ -315,7 +338,12 @@ void BrinaEditor::resized()
     }
     loadButton.setBounds (header.removeFromRight (64));
     header.removeFromRight (gap);
-    sampleLabel.setBounds (header.removeFromRight (360));
+    header.removeFromLeft (214);    // titolo
+    playButton.setBounds (header.removeFromLeft (72));
+    header.removeFromLeft (gap);
+    killButton.setBounds (header.removeFromLeft (52));
+    header.removeFromLeft (gap);
+    sampleLabel.setBounds (header);
 
     waveform.setBounds (area.removeFromTop (150));
     area.removeFromTop (gap);
@@ -335,6 +363,7 @@ void BrinaEditor::resized()
     auto grains = area.removeFromTop (sectionHeight);
     area.removeFromTop (gap);
     sections.push_back ({ "GRAINS", grains });
+    positionButton.setBounds (grains.getX() + 70, grains.getY() + 3, 112, 18);
     {
         auto row = content (grains);
         const int cell = row.getWidth() / 12;
@@ -389,6 +418,12 @@ void BrinaEditor::timerCallback()
     const bool rec = proc.isRecording();
     recButton.setToggleState (rec, juce::dontSendNotification);
     recButton.setButtonText (rec ? "Stop" : "Rec");
+
+    playButton.setButtonText (playButton.getToggleState() ? "Playing" : "Stopped");
+
+    const bool fixed = positionButton.getToggleState();
+    positionButton.setButtonText (fixed ? "Position: Fixed" : "Position: Auto");
+    knobs[9]->slider.setEnabled (! fixed);   // Scan non ha effetto a posizione fissa
 
     juce::String text = status;
 

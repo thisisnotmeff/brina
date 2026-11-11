@@ -109,6 +109,54 @@ int main()
             auto b = run (e, nullptr, p, sr, 2.0, 1);
             check (a.finite && b.finite, "cambio campione / blocchi irregolari", a);
         }
+        {   // 6. stop: le code sfumano fino al silenzio, le note vengono ignorate, start fa ripartire
+            Engine e; e.prepare (sr); Params p;
+            auto playing = run (e, sample.get(), p, sr, 8.0, 512);
+            p.running = false;
+            run (e, sample.get(), p, sr, 40.0, 512);
+            e.noteOn (60, 1.0f);
+            auto stopped = run (e, sample.get(), p, sr, 3.0, 512);
+            check (playing.rms > 0.005 && stopped.finite && stopped.peak < 1e-4, "stop -> silenzio, note ignorate", stopped);
+            p.running = true;
+            auto again = run (e, sample.get(), p, sr, 8.0, 512);
+            check (again.finite && again.rms > 0.005, "start -> riparte", again);
+        }
+        {   // 7. kill: con note tenute e code al massimo, silenzio totale dopo pochi millisecondi
+            Engine e; e.prepare (sr); Params p; p.genOn = false;
+            p.reverbSize = 1; p.reverbDamp = 0; p.shimmer = 1; p.reverbMix = 1; p.delayFeedback = 0.95f; p.delayMix = 1;
+            for (int n = 55; n < 61; ++n) e.noteOn (n, 1.0f);
+            auto loud = run (e, sample.get(), p, sr, 10.0, 512);
+            e.kill();
+            auto fade = run (e, sample.get(), p, sr, 0.02, 16);     // la dissolvenza (6 ms), a blocchi piccoli
+            auto dead = run (e, sample.get(), p, sr, 2.0, 512);
+            check (loud.rms > 0.02 && fade.finite && fade.peak <= loud.peak + 1e-6 && dead.peak == 0.0, "kill -> silenzio immediato", dead);
+
+            e.noteOn (60, 1.0f);    // dopo il kill si puo' suonare di nuovo
+            auto after = run (e, sample.get(), p, sr, 3.0, 512);
+            check (after.finite && after.rms > 0.005, "dopo il kill si risuona", after);
+        }
+        {   // 7b. kill col segnale Dry (FX): il dry passa intatto, il resto tace
+            Engine e; e.prepare (sr); Params p; p.dry = 1;
+            run (e, sample.get(), p, sr, 5.0, 512, true);
+            p.genOn = false;
+            e.kill();
+            run (e, sample.get(), p, sr, 0.05, 512, true);
+            auto dry = run (e, sample.get(), p, sr, 1.0, 512, true);
+            check (std::abs (dry.peak - 0.25) < 1e-6 && std::abs (dry.rms - 0.25) < 1e-6, "kill non tocca il dry", dry);
+        }
+        {   // 8. posizione fissa: Scan ignorato; in automatico la posizione scorre come prima
+            Engine e; e.prepare (sr); Params p; p.scan = 1.0f;
+            auto a = run (e, sample.get(), p, sr, 1.3, 512);
+            const float moving = e.scanVis.load();
+            p.fixedPosition = true;
+            auto f = run (e, sample.get(), p, sr, 1.3, 512);
+            const float fixed = e.scanVis.load();
+            p.fixedPosition = false;
+            run (e, sample.get(), p, sr, 0.5, 512);
+            const float resumed = e.scanVis.load();
+            check (a.finite && f.finite && f.rms > 0.001 && std::abs (moving - 0.325f) < 0.02f && fixed == 0.0f
+                       && std::abs (resumed - 0.125f) < 0.02f, "posizione fissa / automatica", f);
+        }
     }
 
     std::printf (failures == 0 ? "\nTUTTI I TEST OK\n" : "\n%d TEST FALLITI\n", failures);

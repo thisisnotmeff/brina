@@ -67,6 +67,33 @@ int main (int argc, char** argv)
         check (render (p, 1.0, false) < 1e-4, "generatore spento: torna il silenzio");
         check (render (p, 3.0, false, true) > 0.003, "una nota MIDI suona");
 
+        // --- kill, start/stop, posizione fissa
+        auto setParam = [&p] (const char* id, float v) { p.apvts.getParameter (id)->setValueNotifyingHost (v); };
+        check (p.apvts.getRawParameterValue ("play")->load() > 0.5f && p.apvts.getRawParameterValue ("posMode")->load() < 0.5f,
+               "default: Play acceso, posizione automatica");
+
+        p.triggerKill();
+        render (p, 0.05, false);
+        check (render (p, 1.0, false) == 0.0, "Kill: silenzio immediato");
+        p.triggerKill();     // il parametro torna a 0: e' un altro kill, innocuo
+        render (p, 0.05, false);
+
+        setParam ("genOn", 1.0f);
+        check (render (p, 5.0, false) > 0.003, "dopo il Kill il generatore riparte");
+        setParam ("play", 0.0f);
+        render (p, 40.0, false);
+        check (render (p, 2.0, false, true) < 1e-4, "Stop: silenzio, anche con una nota MIDI");
+        setParam ("play", 1.0f);
+        check (render (p, 5.0, false) > 0.003, "Play: riparte");
+
+        check (std::abs (p.engine.scanVis.load()) > 1e-4f, "posizione automatica: scorre");
+        setParam ("posMode", 1.0f);
+        render (p, 1.0, false);
+        check (p.engine.scanVis.load() == 0.0f, "posizione fissa: ferma su Position");
+        setParam ("posMode", 0.0f);
+        setParam ("genOn", 0.0f);
+        render (p, 30.0, false);
+
         if (fx)
         {
             p.startRecording();

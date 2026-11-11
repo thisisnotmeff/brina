@@ -44,6 +44,9 @@ struct Params
     float reverbSize = 0.85f, reverbDamp = 0.4f, shimmer = 0.25f, reverbMix = 0.4f;
     // Uscita
     float dry = 0.0f, volumeDb = 0.0f;
+    // Trasporto e modo della posizione
+    bool  running = true;         // false: niente note ne' grani nuovi, le code sfumano da sole
+    bool  fixedPosition = false;  // true: la posizione resta ferma su Position (Scan ignorato)
 };
 
 inline const juce::StringArray& rateNames()
@@ -152,6 +155,8 @@ public:
         reverb.setSampleRate (sr);
         shimL.prepare (sr);
         shimR.prepare (sr);
+        killFade = juce::jmax (32, (int) (0.006 * sr));
+        killLeft = -1;
         reset();
     }
 
@@ -177,6 +182,9 @@ public:
     //==========================================================================
     void noteOn (int note, float velocity, int lengthSamples = -1)
     {
+        if (! running)   // fermo (Stop): le note vengono ignorate
+            return;
+
         Voice* target = nullptr;
 
         for (auto& v : voices)
@@ -216,6 +224,14 @@ public:
         for (auto& v : voices) v.held = false;
     }
 
+    /** Kill: sfuma l'uscita in pochi millisecondi (niente click), poi azzera voci, grani e
+        tutte le code (nastro, delay, riverbero). Il segnale Dry non viene toccato. */
+    void kill()
+    {
+        if (killLeft < 0)
+            killLeft = killFade;
+    }
+
     //==========================================================================
     /** in* puo' essere nullptr (strumento). in e out non devono sovrapporsi. n <= maxBlock. */
     void process (SampleData* sample, const float* inL, const float* inR,
@@ -227,6 +243,17 @@ public:
 
         const int len = sample != nullptr ? juce::jmin (sample->length.load(), sample->buffer.getNumSamples()) : 0;
 
+        // --- start / stop
+        if (p.running != running)
+        {
+            running = p.running;
+
+            if (running)
+                samplesToStep = 0.0;    // alla ripartenza il generatore riparte subito
+            else
+                for (auto& v : voices) { v.held = false; v.timed = -1; }   // le note sfumano col Release
+        }
+
         // --- generatore + grani, spezzati sui passi del generatore
         const double stepSamples = stepLength (p, bpm);
         int done = 0;
@@ -235,7 +262,7 @@ public:
         {
             if (samplesToStep <= 0.0)
             {
-                if (p.genOn)
+                if (p.genOn && running)
                     generatorStep (p, stepSamples);
                 samplesToStep += stepSamples;
             }
@@ -258,9 +285,24 @@ public:
         {
             gainSmoothed += gainStep;
             float l = softLimit (mixL[(size_t) i]), r = softLimit (mixR[(size_t) i]);
+
+            if (killLeft >= 0)
+            {
+                const float k = (float) killLeft / (float) killFade;
+                l *= k;
+                r *= k;
+                if (killLeft > 0) --killLeft;
+            }
+
             if (inL != nullptr) { l += p.dry * inL[i]; r += p.dry * (inR != nullptr ? inR[i] : inL[i]); }
             outL[i] = l * gainSmoothed;
             outR[i] = r * gainSmoothed;
+        }
+
+        if (killLeft == 0)   // dissolvenza finita: si azzera tutto (nessuna allocazione)
+        {
+            reset();
+            killLeft = -1;
         }
     }
 
@@ -383,6 +425,9 @@ private:
         const float attackStep = 1.0f / juce::jmax (1.0f, p.attackMs * 0.001f * (float) sr);
         const float releaseStep = 1.0f / juce::jmax (1.0f, p.releaseMs * 0.001f * (float) sr);
 
+        if (p.fixedPosition)
+            scanPhase = 0.0;    // posizione fissa: i grani nascono esattamente su Position
+
         // --- voci: inviluppo e nascita dei grani
         for (auto& v : voices)
         {
@@ -415,7 +460,7 @@ private:
             }
         }
 
-        if (canPlay)
+        if (canPlay && running && ! p.fixedPosition)
         {
             scanPhase += (double) p.scan * n * sample->sampleRate / (sr * len);
             scanPhase -= std::floor (scanPhase);
@@ -629,6 +674,8 @@ private:
     juce::Random rng;
     double scanPhase = 0.0, samplesToStep = 0.0;
     int genDegree = 4;
+    bool running = true;
+    int killFade = 256, killLeft = -1;   // killLeft >= 0: dissolvenza del Kill in corso
 
     std::vector<float> mixL, mixR;
     std::vector<float> wowL, wowR, delayL, delayR;

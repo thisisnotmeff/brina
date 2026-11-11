@@ -93,9 +93,11 @@ private:
     WaveformView waveform;
 
     juce::TextButton loadButton { "Load" }, recButton { "Rec" };
+    juce::TextButton playButton { "Playing" }, killButton { "Kill" }, positionButton { "Position: Auto" };
     juce::ToggleButton driftButton { "On" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> driftAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> driftAttachment, playAttachment, positionAttachment;
     juce::Label sampleLabel;
+    juce::TooltipWindow tooltips { this, 600 };
 
     juce::OwnedArray<Knob> knobs;
     juce::OwnedArray<Choice> choices;

@@ -85,6 +85,11 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     add ("dry",    "Dry Input", Range (0.0f, 1.0f), hasAudioInput() ? 1.0f : 0.0f);
     add ("volume", "Volume",    Range (-48.0f, 12.0f, 0.1f), 0.0f, "dB");
 
+    // Aggiunti in coda: i parametri gia' esistenti restano identici (ID, ordine, intervalli).
+    layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "play", 1 }, "Play", true));
+    layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "kill", 1 }, "Kill", false));
+    addChoice ("posMode", "Position Mode", juce::StringArray { "Auto", "Fixed" }, 0);
+
     return layout;
 }
 
@@ -104,7 +109,8 @@ BrinaProcessor::BrinaProcessor()
             get ("genOn"), get ("genRate"), get ("genProb"), get ("genRoot"), get ("genScale"),
             get ("genOctave"), get ("genRange"), get ("genLength"),
             get ("drive"), get ("wow"), get ("tone"), get ("delayTime"), get ("delayFeedback"), get ("delayMix"),
-            get ("reverbSize"), get ("reverbDamp"), get ("shimmer"), get ("reverbMix"), get ("dry"), get ("volume") };
+            get ("reverbSize"), get ("reverbDamp"), get ("shimmer"), get ("reverbMix"), get ("dry"), get ("volume"),
+            get ("play"), get ("kill"), get ("posMode") };
 }
 
 bool BrinaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -124,6 +130,7 @@ void BrinaProcessor::prepareToPlay (double sampleRate, int)
     hostSampleRate = sampleRate;
     engine.prepare (sampleRate);
     inputCopy.setSize (2, brina::Engine::maxBlock);
+    lastKill = raw.kill->load() > 0.5f;
 }
 
 void BrinaProcessor::readParams (brina::Params& p) const
@@ -144,6 +151,8 @@ void BrinaProcessor::readParams (brina::Params& p) const
     p.shimmer = f (raw.shimmer);     p.reverbMix = f (raw.reverbMix);
     p.dry = hasAudioInput() ? f (raw.dry) : 0.0f;
     p.volumeDb = f (raw.volume);
+    p.running = f (raw.play) > 0.5f;
+    p.fixedPosition = i (raw.posMode) == 1;
 }
 
 //==============================================================================
@@ -163,6 +172,15 @@ void BrinaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     brina::Params p;
     readParams (p);
+
+    // Kill e' un comando, non uno stato: scatta a ogni cambio del parametro, cosi' funziona
+    // sia dal tasto dell'interfaccia sia mappato in Live a un tasto MIDI (momentaneo o toggle).
+    const bool killNow = raw.kill->load (std::memory_order_relaxed) > 0.5f;
+    if (killNow != lastKill)
+    {
+        lastKill = killNow;
+        engine.kill();
+    }
 
     double bpm = 120.0;
     if (auto* ph = getPlayHead())
@@ -304,6 +322,16 @@ void BrinaProcessor::startRecording()
 void BrinaProcessor::stopRecording()
 {
     recording.store (false);
+}
+
+void BrinaProcessor::triggerKill()
+{
+    if (auto* param = apvts.getParameter ("kill"))
+    {
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->getValue() > 0.5f ? 0.0f : 1.0f);
+        param->endChangeGesture();
+    }
 }
 
 //==============================================================================
