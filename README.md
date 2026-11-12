@@ -26,6 +26,14 @@ poi sblocca i file scaricati dal Terminale:
 
 In Live: Impostazioni > Plug-Ins > attiva VST3 (e/o Audio Units) > *Rescan*.
 
+**Aggiornare a una versione nuova:** chiudi Live prima di sostituire i plugin. Se Live fa uno
+scan mentre i file vengono copiati, segna il plugin come non caricabile e non lo riprova più:
+i file dello zip hanno sempre la stessa data, quindi per Live non cambiano. Se Brina non compare
+dopo un aggiornamento, chiudi Live, aggiorna la data dei file (usa la cartella dove li hai
+installati; per `/Library/...` aggiungi `sudo` davanti) e riapri Live con *Rescan*:
+
+    find ~/Library/Audio/Plug-Ins/VST3/Brina*.vst3 ~/Library/Audio/Plug-Ins/Components/Brina*.component -exec touch {} +
+
 ## Come si usa
 
 1. Trascina un file audio sulla forma d'onda (o **Load**). In Brina FX puoi premere **Rec**
