@@ -1,6 +1,6 @@
 # Brina — istruzioni per Claude
 
-Plugin granulare ambient per Ableton Live (macOS), ispirato a GrainBrick. Rispondi e commenta in italiano.
+Plugin granulare ambient per Ableton Live (macOS), ispirato a GrainBrick. Always reply in English.
 
 ## Struttura
 - `Source/Engine.h` — tutto il DSP (grani, generatore Drift, nastro, delay, riverbero shimmer). Indipendente dall'host: nessuna dipendenza da `AudioProcessor`.
@@ -30,7 +30,7 @@ Plugin granulare ambient per Ableton Live (macOS), ispirato a GrainBrick. Rispon
 
 ## Convenzioni
 - Un branch per funzione, commit piccoli. Non lavorare direttamente su `main`.
-- Commenti nel codice in italiano, come quelli esistenti.
+- Code comments: existing ones are in Italian; write new ones in English.
 - Aggiorna `README.md` (sezione "Come si usa") e `docs/parametri.md` quando cambia un parametro.
 
 ## Idee future
