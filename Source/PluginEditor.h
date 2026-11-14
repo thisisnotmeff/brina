@@ -49,6 +49,33 @@ private:
 };
 
 //==============================================================================
+/** Pad XY del Morph: gli slot 1-4 agli angoli, il punto sceglie da quali slot leggono i grani.
+    Gli angoli si accendono con i grani che leggono da quello slot. Doppio clic: torna al centro. */
+class MorphPad : public juce::Component,
+                 public juce::SettableTooltipClient
+{
+public:
+    explicit MorphPad (BrinaProcessor&);
+
+    void refresh();     // chiamato dal timer dell'editor
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+private:
+    juce::Rectangle<float> padArea() const;
+    void setFromMouse (const juce::MouseEvent&);
+
+    BrinaProcessor& proc;
+    juce::ParameterAttachment xAttachment, yAttachment;
+    float x = 0.5f, y = 0.5f, amount = 0.0f;
+    std::array<float, BrinaProcessor::numSlots> activity {};
+    std::array<bool, BrinaProcessor::numSlots> filled {};
+};
+
+//==============================================================================
 class BrinaEditor : public juce::AudioProcessorEditor,
                     public juce::FileDragAndDropTarget,
                     private juce::Timer
@@ -85,7 +112,7 @@ private:
     // posizioni in "knobs" e "choices", nell'ordine in cui vengono creati
     enum KnobIndex { scanKnob = 9, firstDriftKnob = 12, firstFxKnob = 16, dryKnob = 26,
                      voicesKnob = 28, voiceSpreadKnob = 29, firstGrainFxKnob = 30, numGrainFxKnobs = 7,
-                     shapeChanceKnob = 37 };
+                     shapeChanceKnob = 37, morphAmtKnob = 38 };
     enum ChoiceIndex { numDriftChoices = 3, voiceModeChoice = 3, sourceModeChoice = 4, shapeChoice = 5 };
 
     Knob& addKnob (const char* paramId, const char* title);
@@ -99,6 +126,7 @@ private:
     BrinaProcessor& proc;
     BrinaLookAndFeel lookAndFeel;
     WaveformView waveform;
+    MorphPad morphPad;
 
     juce::TextButton loadButton { "Load" }, recButton { "Rec" }, clearButton { "Clear" };
     std::array<juce::TextButton, BrinaProcessor::numSlots> slotButtons;

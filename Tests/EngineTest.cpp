@@ -416,6 +416,53 @@ int main()
                        name.toRawUTF8(), b);
             }
         }
+        // ------------------------------------------------------------------ morph tra gli slot
+        {   // 21. Morph Amount a 0: il pad non conta, uscita identica campione per campione
+            SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), nullptr };
+            Params p; p.sourceMode = 0; p.grainVoices = 3;
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (13);
+            auto a = runSlots (plain, slots, p, sr, 8.0, 512);
+            p.morphX = 0.9f; p.morphY = 0.1f;
+            Engine same; same.prepare (sr); same.setRandomSeed (13);
+            auto b = runSlots (same, slots, p, sr, 8.0, 512);
+            check (a.rms == b.rms && a.peak == b.peak && a.zeroCrossHz == b.zeroCrossHz, "Morph Amount a 0: suono invariato", b);
+        }
+        {   // 22. sull'angolo dello slot 4, con Amount al massimo, suona solo lo slot 4
+            SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), high.get() };
+            Params p; p.sourceMode = 1; p.grainVoices = 4; p.morphAmt = 1; p.morphX = 1; p.morphY = 0;
+            Engine e; e.prepare (sr);
+            std::set<int> seen;
+            auto s = runSlots (e, slots, p, sr, 8.0, 512, false, &seen);
+            check (s.finite && s.rms > 0.005 && seen == std::set<int> { 3 }, "Morph sull'angolo 4: solo lo slot 4", s);
+        }
+        {   // 23. al centro, con gli slot 2 e 4 vuoti: i grani vanno solo sugli slot pieni
+            SampleData* slots[Engine::numSlots] = { sample.get(), nullptr, high.get(), nullptr };
+            Params p; p.grainVoices = 4; p.morphAmt = 1; p.morphX = 0.5f; p.morphY = 0.5f;
+            Engine e; e.prepare (sr);
+            std::set<int> seen;
+            auto s = runSlots (e, slots, p, sr, 8.0, 512, false, &seen);
+            check (s.finite && seen == std::set<int> { 0, 2 }, "Morph al centro: solo gli slot pieni", s);
+
+            // sull'angolo di uno slot vuoto il pad non ha peso: decide Source Mode, e si suona lo stesso
+            p.morphX = 1; p.morphY = 1;
+            Engine e2; e2.prepare (sr);
+            std::set<int> seen2;
+            auto s2 = runSlots (e2, slots, p, sr, 8.0, 512, false, &seen2);
+            check (s2.finite && s2.rms > 0.005 && seen2 == std::set<int> { 0, 2 }, "Morph su uno slot vuoto: suona comunque", s2);
+        }
+        {   // 24. i pesi del pad: angoli esatti, somma 1 ovunque
+            bool ok = Engine::morphWeight (0, 0, 1) == 1 && Engine::morphWeight (1, 1, 1) == 1
+                      && Engine::morphWeight (2, 0, 0) == 1 && Engine::morphWeight (3, 1, 0) == 1;
+            for (float x = 0; x <= 1.0f; x += 0.125f)
+                for (float y = 0; y <= 1.0f; y += 0.125f)
+                {
+                    float sum = 0;
+                    for (int s = 0; s < Engine::numSlots; ++s) sum += Engine::morphWeight (s, x, y);
+                    ok = ok && std::abs (sum - 1.0f) < 1e-5f;
+                }
+            Stats none;
+            check (ok, "Morph: pesi degli angoli e somma 1", none);
+        }
         {   // 17. tutto al massimo con otto voci, quattro slot e tutti gli effetti: nessuna esplosione
             Engine e; e.prepare (sr); Params p;
             p.density = 80; p.sizeMs = 1500; p.octaves = 1; p.drive = 1; p.wow = 1; p.delayFeedback = 0.95f;
@@ -423,7 +470,7 @@ int main()
             p.genProb = 1; p.genLength = 8; p.dry = 1; p.volumeDb = 0;
             p.grainVoices = 8; p.voiceSpread = 1; p.voiceMode = 3; p.sourceMode = 0;
             p.gfxFilterChance = p.gfxCrushChance = p.gfxDriveChance = 1; p.gfxFilterRes = 1; p.gfxCrush = 1; p.gfxDrive = 1;
-            p.shapeChance = 1; p.grainShape = 4;
+            p.shapeChance = 1; p.grainShape = 4; p.morphAmt = 0.7f; p.morphX = 0.3f; p.morphY = 0.8f;
             SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), high.get() };
             for (int n = 48; n < 60; ++n) e.noteOn (n, 1.0f);
 

@@ -115,6 +115,9 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     version = 3;
     addChoice ("grainShape", "Grain Shape", brina::shapeNames(), 0);
     add ("shapeChance", "Shape Chance", Range (0.0f, 1.0f), 0.0f);
+    add ("morphX",   "Morph X",      Range (0.0f, 1.0f), 0.5f);
+    add ("morphY",   "Morph Y",      Range (0.0f, 1.0f), 0.5f);
+    add ("morphAmt", "Morph Amount", Range (0.0f, 1.0f), 0.0f);
 
     return layout;
 }
@@ -140,7 +143,7 @@ BrinaProcessor::BrinaProcessor()
             get ("voices"), get ("voiceSpread"), get ("voiceMode"), get ("sourceMode"),
             get ("gfxFilter"), get ("gfxFilterFreq"), get ("gfxFilterRes"),
             get ("gfxCrush"), get ("gfxCrushAmt"), get ("gfxDrive"), get ("gfxDriveAmt"),
-            get ("grainShape"), get ("shapeChance") };
+            get ("grainShape"), get ("shapeChance"), get ("morphX"), get ("morphY"), get ("morphAmt") };
 }
 
 bool BrinaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -189,6 +192,7 @@ void BrinaProcessor::readParams (brina::Params& p) const
     p.gfxCrushChance = f (raw.gfxCrush);   p.gfxCrush = f (raw.gfxCrushAmt);
     p.gfxDriveChance = f (raw.gfxDrive);   p.gfxDrive = f (raw.gfxDriveAmt);
     p.grainShape = i (raw.grainShape);     p.shapeChance = f (raw.shapeChance);
+    p.morphX = f (raw.morphX);  p.morphY = f (raw.morphY);  p.morphAmt = f (raw.morphAmt);
 }
 
 //==============================================================================

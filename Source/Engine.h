@@ -500,12 +500,62 @@ private:
         if (numPlayable <= 1)
             return numPlayable == 1 ? playable[0] : -1;
 
+        // Morph: a probabilita' zero non si estrae nessun numero, la sequenza resta quella di prima
+        if (p.morphAmt > 0.0f && rng.nextFloat() < p.morphAmt)
+        {
+            const int slot = morphSlot (p);
+            if (slot >= 0)
+                return slot;
+        }
+
         switch (p.sourceMode)
         {
             case 0:  return playable[(size_t) rng.nextInt (numPlayable)];
             case 2:  return playable[(size_t) (k % numPlayable)];
             default: return playable[(size_t) (cycle++ % (juce::uint32) numPlayable)];
         }
+    }
+
+public:
+    /** Peso dello slot \p slot nel pad del Morph: 1 in alto a sinistra, 2 in alto a destra,
+        3 in basso a sinistra, 4 in basso a destra (Y = 1 in alto). */
+    static float morphWeight (int slot, float x, float y)
+    {
+        x = juce::jlimit (0.0f, 1.0f, x);
+        y = juce::jlimit (0.0f, 1.0f, y);
+        const float wx = (slot & 1) != 0 ? x : 1.0f - x;
+        const float wy = slot < 2 ? y : 1.0f - y;
+        return wx * wy;
+    }
+
+private:
+    /** Lo slot scelto dai pesi del pad, solo tra quelli suonabili; -1 se pesano tutti zero
+        (il punto e' sull'angolo di uno slot vuoto): allora decide Source Mode. */
+    int morphSlot (const Params& p)
+    {
+        float total = 0.0f;
+        for (int i = 0; i < numPlayable; ++i)
+            total += morphWeight (playable[(size_t) i], p.morphX, p.morphY);
+
+        if (total <= 1e-6f)
+            return -1;
+
+        float r = rng.nextFloat() * total;
+        int lastWeighted = -1;
+        for (int i = 0; i < numPlayable; ++i)
+        {
+            const int slot = playable[(size_t) i];
+            const float w = morphWeight (slot, p.morphX, p.morphY);
+            if (w <= 0.0f)
+                continue;
+
+            lastWeighted = slot;
+            r -= w;
+            if (r < 0.0f)
+                return slot;
+        }
+
+        return lastWeighted;   // arrotondamenti: l'ultimo slot con un peso
     }
 
     /** Una nascita: un grano per voce. La voce 0 parte subito, le altre si distribuiscono

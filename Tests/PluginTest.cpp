@@ -81,10 +81,10 @@ static void checkOldParameters (BrinaProcessor& p, bool fx)
         tail = tail && params[i]->getVersionHint() > 1;
 
     auto raw = [&p] (const char* id) { auto* v = p.apvts.getRawParameterValue (id); return v != nullptr ? v->load() : -1.0f; };
-    check (tail && params.size() == (int) std::size (old) + 11 + 2
+    check (tail && params.size() == (int) std::size (old) + 11 + 5
                && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-               && raw ("shapeChance") == 0.0f,
-           "parametri nuovi in coda; default: una voce, nessun effetto per grano, nessuna forma");
+               && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f,
+           "parametri nuovi in coda; default: una voce, nessun effetto, nessuna forma, morph spento");
 
     // i parametri della seconda versione restano dove sono: la terza va in coda
     bool v3Last = true;
@@ -200,6 +200,25 @@ int main (int argc, char** argv)
         check (p.apvts.getRawParameterValue ("grainShape")->load() == 4.0f && render (p, 2.0, false) > 0.003,
                "forma Random su tutti i grani: suona");
 
+        // Morph sull'angolo dello slot 3 (in basso a sinistra): i grani leggono solo da li'
+        setParam ("morphAmt", 1.0f); setParam ("morphX", 0.0f); setParam ("morphY", 0.0f);
+        render (p, 1.0, false);
+        bool onlyThird = true, anyThird = false;
+        for (int i = 0; i < 40; ++i)
+        {
+            render (p, 0.05, false);
+            for (auto& v : p.engine.grainVis)
+            {
+                const float g = v.load();
+                if (g < 0.0f) continue;
+                // i grani nati prima del cambio sfumano entro Size (220 ms): dopo 1 s restano solo i nuovi
+                onlyThird = onlyThird && (int) g == 2;
+                anyThird = anyThird || (int) g == 2;
+            }
+        }
+        check (onlyThird && anyThird, "Morph sull'angolo 3: i grani leggono solo dallo slot 3");
+        setParam ("morphAmt", 0.0f); setParam ("morphX", 0.5f); setParam ("morphY", 0.5f);
+
         bool sawFirst = false, sawThird = false, sawOther = false;
         for (int i = 0; i < 40; ++i)
         {
@@ -309,6 +328,7 @@ int main (int argc, char** argv)
         p.apvts.getParameter ("voices")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("gfxDrive")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("shapeChance")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("morphAmt")->setValueNotifyingHost (1.0f);
         p.setStateInformation (oldState.getData(), (int) oldState.getSize());
 
         auto raw = [&p] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
@@ -317,7 +337,7 @@ int main (int argc, char** argv)
                    && slotLength (p, 0) == 96000,
                "set della versione precedente: parametri e campione al loro posto");
         check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-                   && raw ("shapeChance") == 0.0f
+                   && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f
                    && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
                "set della versione precedente: una voce, nessun effetto, slot 2-4 vuoti");
         p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);

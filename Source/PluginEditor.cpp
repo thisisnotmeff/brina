@@ -216,11 +216,118 @@ void WaveformView::mouseUp (const juce::MouseEvent&)
 }
 
 //==============================================================================
+MorphPad::MorphPad (BrinaProcessor& p)
+    : proc (p),
+      xAttachment (*p.apvts.getParameter ("morphX"), [this] (float v) { x = v; repaint(); }, nullptr),
+      yAttachment (*p.apvts.getParameter ("morphY"), [this] (float v) { y = v; repaint(); }, nullptr)
+{
+    xAttachment.sendInitialUpdate();
+    yAttachment.sendInitialUpdate();
+}
+
+juce::Rectangle<float> MorphPad::padArea() const
+{
+    return getLocalBounds().toFloat().reduced (1.0f);
+}
+
+void MorphPad::refresh()
+{
+    // grani attivi per slot, con un po' di memoria: gli angoli respirano invece di sfarfallare
+    std::array<int, BrinaProcessor::numSlots> count {};
+    for (auto& v : proc.engine.grainVis)
+    {
+        const float g = v.load (std::memory_order_relaxed);
+        if (g >= 0.0f)
+            ++count[(size_t) juce::jlimit (0, BrinaProcessor::numSlots - 1, (int) g)];
+    }
+
+    for (int s = 0; s < BrinaProcessor::numSlots; ++s)
+    {
+        const float target = juce::jmin (1.0f, (float) count[(size_t) s] / 12.0f);
+        activity[(size_t) s] += 0.3f * (target - activity[(size_t) s]);
+        auto sample = proc.getSample (s);
+        filled[(size_t) s] = sample != nullptr && sample->length.load() > 0;
+    }
+
+    amount = proc.apvts.getRawParameterValue ("morphAmt")->load();
+    repaint();
+}
+
+void MorphPad::paint (juce::Graphics& g)
+{
+    const auto area = padArea();
+    const bool on = amount > 0.0f;
+
+    g.setColour (ui::background);
+    g.fillRoundedRectangle (area, 4.0f);
+    g.setColour (ui::outline);
+    g.drawRoundedRectangle (area, 4.0f, 1.0f);
+    g.drawLine (area.getCentreX(), area.getY() + 4, area.getCentreX(), area.getBottom() - 4, 0.5f);
+    g.drawLine (area.getX() + 4, area.getCentreY(), area.getRight() - 4, area.getCentreY(), 0.5f);
+
+    // angoli: 1 in alto a sinistra, 2 in alto a destra, 3 in basso a sinistra, 4 in basso a destra
+    const float r = 9.0f;
+    const juce::Point<float> corners[] = { area.getTopLeft() + juce::Point<float> (r + 3, r + 3),
+                                           area.getTopRight() + juce::Point<float> (-r - 3, r + 3),
+                                           area.getBottomLeft() + juce::Point<float> (r + 3, -r - 3),
+                                           area.getBottomRight() + juce::Point<float> (-r - 3, -r - 3) };
+
+    for (int s = 0; s < BrinaProcessor::numSlots; ++s)
+    {
+        const auto c = corners[s];
+        const float glow = filled[(size_t) s] ? 0.25f + 0.75f * activity[(size_t) s] : 0.0f;
+        g.setColour (ui::warm.withAlpha (glow * 0.8f));
+        g.fillEllipse (c.x - r, c.y - r, 2 * r, 2 * r);
+        g.setColour (filled[(size_t) s] ? ui::text : ui::dim.withAlpha (0.5f));
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (juce::String (s + 1), juce::Rectangle<float> (c.x - r, c.y - r, 2 * r, 2 * r), juce::Justification::centred);
+    }
+
+    const float px = area.getX() + x * area.getWidth();
+    const float py = area.getBottom() - y * area.getHeight();
+    g.setColour ((on ? ui::accent : ui::dim).withAlpha (0.25f));
+    g.fillEllipse (px - 10, py - 10, 20, 20);
+    g.setColour (on ? ui::accent : ui::dim);
+    g.fillEllipse (px - 5, py - 5, 10, 10);
+}
+
+void MorphPad::setFromMouse (const juce::MouseEvent& e)
+{
+    const auto area = padArea();
+    const float nx = juce::jlimit (0.0f, 1.0f, (e.position.x - area.getX()) / area.getWidth());
+    const float ny = juce::jlimit (0.0f, 1.0f, (area.getBottom() - e.position.y) / area.getHeight());
+    xAttachment.setValueAsPartOfGesture (nx);
+    yAttachment.setValueAsPartOfGesture (ny);
+}
+
+void MorphPad::mouseDown (const juce::MouseEvent& e)
+{
+    xAttachment.beginGesture();
+    yAttachment.beginGesture();
+    setFromMouse (e);
+}
+
+void MorphPad::mouseDrag (const juce::MouseEvent& e) { setFromMouse (e); }
+
+void MorphPad::mouseUp (const juce::MouseEvent&)
+{
+    xAttachment.endGesture();
+    yAttachment.endGesture();
+}
+
+void MorphPad::mouseDoubleClick (const juce::MouseEvent&)
+{
+    xAttachment.setValueAsCompleteGesture (0.5f);
+    yAttachment.setValueAsCompleteGesture (0.5f);
+}
+
+//==============================================================================
 BrinaEditor::BrinaEditor (BrinaProcessor& p)
-    : AudioProcessorEditor (p), proc (p), waveform (p)
+    : AudioProcessorEditor (p), proc (p), waveform (p), morphPad (p)
 {
     setLookAndFeel (&lookAndFeel);
     addAndMakeVisible (waveform);
+    addAndMakeVisible (morphPad);
 
     addAndMakeVisible (loadButton);
     loadButton.onClick = [this] { openChooser(); };
@@ -299,7 +406,7 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
              { "gfxFilter", "Filter" }, { "gfxFilterFreq", "Cutoff" }, { "gfxFilterRes", "Reso" },
              { "gfxCrush", "Crush" }, { "gfxCrushAmt", "Amount" },
              { "gfxDrive", "Drive" }, { "gfxDriveAmt", "Amount" },
-             { "shapeChance", "Chance" } })
+             { "shapeChance", "Chance" }, { "morphAmt", "Amount" } })
         addKnob (id, title);
 
     addChoice ("genRate", "Rate");
@@ -319,6 +426,8 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
 
     choices[shapeChoice]->box.setTooltip ("Forma del grano: Swell sale piano e cade in fretta, Twin ha due gobbe, "
                                           "Tremolo pulsa, Pluck attacca secco e sfuma, Random sceglie a ogni grano");
+    knobs[morphAmtKnob]->slider.setTooltip ("Quanti grani scelgono lo slot dal pad: 0 nessuno (decide Grains pick), 1 tutti");
+    morphPad.setTooltip ("Morph: trascina il punto verso gli slot 1-4 agli angoli. Doppio clic: al centro");
     knobs[shapeChanceKnob]->slider.setTooltip ("Quanti grani prendono la forma scelta: 0 nessuno (la solita Hann), 1 tutti");
 
     for (int i : { 0, 3, 5 })
@@ -517,6 +626,16 @@ void BrinaEditor::resized()
             placeKnob (shapeChanceKnob, inner.removeFromRight (72));
             placeChoice (shapeChoice, inner.reduced (8, 0));
         }
+
+        auto morph = row.removeFromLeft (214);
+        row.removeFromLeft (gap);
+        sections.push_back ({ "MORPH  -  blend the slots", morph });
+        {
+            auto inner = content (morph);
+            placeKnob (morphAmtKnob, inner.removeFromRight (72));
+            morphPad.setBounds (inner.withTrimmedTop (2).withSizeKeepingCentre (juce::jmin (inner.getWidth(), inner.getHeight() + 2),
+                                                                                 inner.getHeight() + 2));
+        }
     }
 
     // --- Drift (generatore di note)
@@ -558,6 +677,7 @@ void BrinaEditor::resized()
 void BrinaEditor::timerCallback()
 {
     waveform.refresh();
+    morphPad.refresh();
 
     const bool rec = proc.isRecording();
     recButton.setToggleState (rec, juce::dontSendNotification);
