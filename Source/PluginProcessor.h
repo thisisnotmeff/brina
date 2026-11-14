@@ -94,7 +94,8 @@ private:
                            *play, *kill, *posMode,
                            *voices, *voiceSpread, *voiceMode, *sourceMode,
                            *gfxFilter, *gfxFilterFreq, *gfxFilterRes, *gfxCrush, *gfxCrushAmt, *gfxDrive, *gfxDriveAmt,
-                           *grainShape, *shapeChance, *morphX, *morphY, *morphAmt;
+                           *grainShape, *shapeChance, *morphX, *morphY, *morphAmt,
+                           *weatherAmt, *weatherRate, *weatherMood;
     } raw {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BrinaProcessor)

@@ -76,6 +76,23 @@ private:
 };
 
 //==============================================================================
+/** Il cielo del Meteo: una striscia da calma a tempesta con il punto dove si trova adesso. */
+class WeatherMeter : public juce::Component,
+                     public juce::SettableTooltipClient
+{
+public:
+    explicit WeatherMeter (BrinaProcessor& p) : proc (p) {}
+
+    void refresh();     // chiamato dal timer dell'editor
+    void paint (juce::Graphics&) override;
+
+private:
+    BrinaProcessor& proc;
+    float intensity = -1.0f;
+    std::vector<float> history;      // ultimi valori, per la scia
+};
+
+//==============================================================================
 class BrinaEditor : public juce::AudioProcessorEditor,
                     public juce::FileDragAndDropTarget,
                     private juce::Timer
@@ -112,8 +129,8 @@ private:
     // posizioni in "knobs" e "choices", nell'ordine in cui vengono creati
     enum KnobIndex { scanKnob = 9, firstDriftKnob = 12, firstFxKnob = 16, dryKnob = 26,
                      voicesKnob = 28, voiceSpreadKnob = 29, firstGrainFxKnob = 30, numGrainFxKnobs = 7,
-                     shapeChanceKnob = 37, morphAmtKnob = 38 };
-    enum ChoiceIndex { numDriftChoices = 3, voiceModeChoice = 3, sourceModeChoice = 4, shapeChoice = 5 };
+                     shapeChanceKnob = 37, morphAmtKnob = 38, weatherAmtKnob = 39, weatherRateKnob = 40 };
+    enum ChoiceIndex { numDriftChoices = 3, voiceModeChoice = 3, sourceModeChoice = 4, shapeChoice = 5, weatherMoodChoice = 6 };
 
     Knob& addKnob (const char* paramId, const char* title);
     Choice& addChoice (const char* paramId, const char* title);
@@ -127,6 +144,7 @@ private:
     BrinaLookAndFeel lookAndFeel;
     WaveformView waveform;
     MorphPad morphPad;
+    WeatherMeter weatherMeter;
 
     juce::TextButton loadButton { "Load" }, recButton { "Rec" }, clearButton { "Clear" };
     std::array<juce::TextButton, BrinaProcessor::numSlots> slotButtons;

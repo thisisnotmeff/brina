@@ -463,6 +463,71 @@ int main()
             Stats none;
             check (ok, "Morph: pesi degli angoli e somma 1", none);
         }
+        // ------------------------------------------------------------------ meteo
+        {   // 25. Weather Amount a 0: il meteo non conta, uscita identica campione per campione
+            Params p;
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (29);
+            auto a = run (plain, sample.get(), p, sr, 8.0, 512);
+            p.weatherMood = 2; p.weatherRate = 30;
+            Engine same; same.prepare (sr); same.setRandomSeed (29);
+            auto b = run (same, sample.get(), p, sr, 8.0, 512);
+            check (a.rms == b.rms && a.peak == b.peak && a.zeroCrossHz == b.zeroCrossHz && same.weatherVis.load() < 0.0f,
+                   "Weather Amount a 0: suono invariato", b);
+        }
+        {   // 26. due ore di meteo per ogni Mood: i valori restano negli intervalli dei parametri, anche
+            //     partendo dagli estremi; la tempesta si muove piu' della calma ed e' piu' fitta
+            struct Range { float lo = 1e9f, hi = -1e9f; double sum = 0; long n = 0;
+                           void add (float v) { lo = std::min (lo, v); hi = std::max (hi, v); sum += v; ++n; }
+                           double mean() const { return sum / (double) n; } };
+            bool inRange = true, smooth = true;
+            Range density[4];
+
+            for (int mood = 0; mood < 4; ++mood)
+            {
+                for (int extreme = 0; extreme < 3; ++extreme)
+                {
+                    Params p; p.weatherAmt = 1; p.weatherMood = mood; p.weatherRate = 30;
+                    if (extreme == 1) { p.density = 80; p.sizeMs = 10; p.spray = 1; p.toneHz = 20000; }
+                    if (extreme == 2) { p.density = 1; p.sizeMs = 1500; p.spray = 0; p.toneHz = 300; }
+
+                    Weather w; w.setSeed (100 + mood); w.prepare (sr);
+                    Params q, last;
+                    bool first = true;
+                    for (long done = 0; done < (long) (sr * 7200.0); done += 512)
+                    {
+                        w.advance (512, p);
+                        w.apply (p, q);
+                        inRange = inRange && q.density >= 1 && q.density <= 80 && q.sizeMs >= 10 && q.sizeMs <= 1500
+                                  && q.spray >= 0 && q.spray <= 1 && q.toneHz >= 300 && q.toneHz <= 20000
+                                  && std::isfinite (q.density) && std::isfinite (q.sizeMs);
+                        // niente salti: in 12 ms la densita' cambia al massimo di qualche per cento
+                        if (! first)
+                            smooth = smooth && std::abs (std::log2 (q.density / last.density)) < 0.05f;
+                        if (extreme == 0) density[mood].add (q.density);
+                        last = q; first = false;
+                    }
+                }
+            }
+
+            Stats none;
+            std::printf ("      (densita' media: calma %.1f, brezza %.1f, tempesta %.1f, variabile %.1f gr/s; "
+                         "escursione calma %.1f-%.1f, tempesta %.1f-%.1f)\n",
+                         density[0].mean(), density[1].mean(), density[2].mean(), density[3].mean(),
+                         density[0].lo, density[0].hi, density[2].lo, density[2].hi);
+            check (inRange, "Meteo: valori sempre negli intervalli", none);
+            check (smooth, "Meteo: nessun salto brusco", none);
+            check (density[2].mean() > 1.5 * density[0].mean()
+                       && density[2].hi / density[2].lo > density[0].hi / density[0].lo
+                       && density[0].hi / density[0].lo > 1.5,
+                   "Meteo: la tempesta e' piu' fitta e piu' mossa della calma", none);
+        }
+        {   // 27. tempesta al massimo nel motore vero, un minuto: suona, nessuna esplosione
+            Engine e; e.prepare (sr); Params p;
+            p.weatherAmt = 1; p.weatherMood = 2; p.weatherRate = 30; p.genRate = 0; p.genProb = 1;
+            auto s = run (e, sample.get(), p, sr, 60.0, 512);
+            const float vis = e.weatherVis.load();
+            check (s.finite && s.rms > 0.005 && s.peak <= 1.76 && vis >= 0.0f && vis <= 1.0f, "Meteo in tempesta, 60 s", s);
+        }
         {   // 17. tutto al massimo con otto voci, quattro slot e tutti gli effetti: nessuna esplosione
             Engine e; e.prepare (sr); Params p;
             p.density = 80; p.sizeMs = 1500; p.octaves = 1; p.drive = 1; p.wow = 1; p.delayFeedback = 0.95f;
@@ -471,6 +536,7 @@ int main()
             p.grainVoices = 8; p.voiceSpread = 1; p.voiceMode = 3; p.sourceMode = 0;
             p.gfxFilterChance = p.gfxCrushChance = p.gfxDriveChance = 1; p.gfxFilterRes = 1; p.gfxCrush = 1; p.gfxDrive = 1;
             p.shapeChance = 1; p.grainShape = 4; p.morphAmt = 0.7f; p.morphX = 0.3f; p.morphY = 0.8f;
+            p.weatherAmt = 1; p.weatherMood = 2; p.weatherRate = 30;
             SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), high.get() };
             for (int n = 48; n < 60; ++n) e.noteOn (n, 1.0f);
 

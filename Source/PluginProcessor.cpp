@@ -118,6 +118,9 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     add ("morphX",   "Morph X",      Range (0.0f, 1.0f), 0.5f);
     add ("morphY",   "Morph Y",      Range (0.0f, 1.0f), 0.5f);
     add ("morphAmt", "Morph Amount", Range (0.0f, 1.0f), 0.0f);
+    add ("weatherAmt",  "Weather Amount", Range (0.0f, 1.0f), 0.0f);
+    add ("weatherRate", "Weather Rate",   skewed (30.0f, 1200.0f, 180.0f), 180.0f, "s");
+    addChoice ("weatherMood", "Weather Mood", brina::weatherMoodNames(), 1);
 
     return layout;
 }
@@ -143,7 +146,8 @@ BrinaProcessor::BrinaProcessor()
             get ("voices"), get ("voiceSpread"), get ("voiceMode"), get ("sourceMode"),
             get ("gfxFilter"), get ("gfxFilterFreq"), get ("gfxFilterRes"),
             get ("gfxCrush"), get ("gfxCrushAmt"), get ("gfxDrive"), get ("gfxDriveAmt"),
-            get ("grainShape"), get ("shapeChance"), get ("morphX"), get ("morphY"), get ("morphAmt") };
+            get ("grainShape"), get ("shapeChance"), get ("morphX"), get ("morphY"), get ("morphAmt"),
+            get ("weatherAmt"), get ("weatherRate"), get ("weatherMood") };
 }
 
 bool BrinaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -193,6 +197,7 @@ void BrinaProcessor::readParams (brina::Params& p) const
     p.gfxDriveChance = f (raw.gfxDrive);   p.gfxDrive = f (raw.gfxDriveAmt);
     p.grainShape = i (raw.grainShape);     p.shapeChance = f (raw.shapeChance);
     p.morphX = f (raw.morphX);  p.morphY = f (raw.morphY);  p.morphAmt = f (raw.morphAmt);
+    p.weatherAmt = f (raw.weatherAmt); p.weatherRate = f (raw.weatherRate); p.weatherMood = i (raw.weatherMood);
 }
 
 //==============================================================================

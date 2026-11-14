@@ -81,10 +81,10 @@ static void checkOldParameters (BrinaProcessor& p, bool fx)
         tail = tail && params[i]->getVersionHint() > 1;
 
     auto raw = [&p] (const char* id) { auto* v = p.apvts.getRawParameterValue (id); return v != nullptr ? v->load() : -1.0f; };
-    check (tail && params.size() == (int) std::size (old) + 11 + 5
+    check (tail && params.size() == (int) std::size (old) + 11 + 8
                && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-               && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f,
-           "parametri nuovi in coda; default: una voce, nessun effetto, nessuna forma, morph spento");
+               && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f && raw ("weatherAmt") == 0.0f,
+           "parametri nuovi in coda; default: una voce, nessun effetto, forma, morph e meteo spenti");
 
     // i parametri della seconda versione restano dove sono: la terza va in coda
     bool v3Last = true;
@@ -219,6 +219,16 @@ int main (int argc, char** argv)
         check (onlyThird && anyThird, "Morph sull'angolo 3: i grani leggono solo dallo slot 3");
         setParam ("morphAmt", 0.0f); setParam ("morphX", 0.5f); setParam ("morphY", 0.5f);
 
+        // Meteo: le manopole non si muovono, il motore si'
+        check (p.engine.weatherVis.load() < 0.0f, "Meteo spento: nessuna intensita'");
+        setParam ("weatherAmt", 1.0f); setParam ("weatherMood", 2.0f / 3.0f);   // Storm
+        const float densityBefore = p.apvts.getRawParameterValue ("density")->load();
+        check (render (p, 3.0, false) > 0.003 && p.engine.weatherVis.load() >= 0.0f
+                   && p.apvts.getRawParameterValue ("density")->load() == densityBefore
+                   && p.apvts.getRawParameterValue ("weatherMood")->load() == 2.0f,
+               "Meteo in tempesta: suona, le manopole restano dove sono");
+        setParam ("weatherAmt", 0.5f);
+
         bool sawFirst = false, sawThird = false, sawOther = false;
         for (int i = 0; i < 40; ++i)
         {
@@ -279,6 +289,11 @@ int main (int argc, char** argv)
         check (p.apvts.getRawParameterValue ("voices")->load() == 8.0f && p.apvts.getRawParameterValue ("sourceMode")->load() == 0.0f
                    && std::abs (p.apvts.getRawParameterValue ("gfxCrush")->load() - 0.5f) < 1e-4f && p.selectedSlot.load() == 2,
                "voci, sorgente, effetti per grano e slot selezionato ripristinati");
+        check (p.apvts.getRawParameterValue ("grainShape")->load() == 4.0f
+                   && std::abs (p.apvts.getRawParameterValue ("shapeChance")->load() - 1.0f) < 1e-4f
+                   && std::abs (p.apvts.getRawParameterValue ("weatherAmt")->load() - 0.5f) < 1e-4f
+                   && p.apvts.getRawParameterValue ("weatherMood")->load() == 2.0f,
+               "forma e meteo ripristinati");
 
         // ripristinare lo stesso stato due volte non lascia residui; e salvarlo di nuovo da' lo stesso risultato
         p.loadFile (wav2, 3);
@@ -329,6 +344,7 @@ int main (int argc, char** argv)
         p.apvts.getParameter ("gfxDrive")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("shapeChance")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("morphAmt")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("weatherAmt")->setValueNotifyingHost (1.0f);
         p.setStateInformation (oldState.getData(), (int) oldState.getSize());
 
         auto raw = [&p] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
@@ -337,7 +353,7 @@ int main (int argc, char** argv)
                    && slotLength (p, 0) == 96000,
                "set della versione precedente: parametri e campione al loro posto");
         check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-                   && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f
+                   && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f && raw ("weatherAmt") == 0.0f
                    && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
                "set della versione precedente: una voce, nessun effetto, slot 2-4 vuoti");
         p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);

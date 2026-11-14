@@ -176,6 +176,99 @@ private:
 };
 
 //==============================================================================
+/** Meteo: una modulazione lenta e casuale ma coerente di density, spray, size e tone.
+    Due strati di rumore liscio: uno lento (un ciclo ogni weatherRate secondi) e le raffiche,
+    sei volte piu' rapide. Mood decide quanto e' agitato il cielo; Changing lo fa cambiare da solo.
+    Lavora su una copia dei parametri: le manopole (e le automazioni di Live) non si muovono.
+    Ha il suo generatore casuale, cosi' la sequenza dei grani non cambia. Non alloca. */
+class Weather
+{
+public:
+    void prepare (double sampleRate)
+    {
+        sr = sampleRate;
+        for (auto& n : slow) n.init (rng);
+        gust.init (rng);
+        mood.init (rng);
+        storm = -1.0f;
+    }
+
+    void setSeed (juce::int64 seed) { rng.setSeed (seed); }
+
+    /** Fa passare \p n campioni. */
+    void advance (int n, const Params& p)
+    {
+        const double cycle = juce::jlimit (5.0, 3600.0, (double) p.weatherRate) * sr;
+        const double dt = (double) n / cycle;
+        for (auto& s : slow) s.advance (dt, rng);
+        gust.advance (dt * 6.0, rng);
+        mood.advance (dt / 3.0, rng);
+
+        // quanto e' agitato il cielo (0 calma, 1 tempesta); i cambi di Mood sfumano in qualche secondo
+        static const float moods[] = { 0.0f, 0.4f, 1.0f };
+        const int m = juce::jlimit (0, 3, p.weatherMood);
+        const float target = m < 3 ? moods[m] : juce::jlimit (0.0f, 1.0f, 0.5f + 0.7f * mood.value());
+        if (storm < 0.0f) storm = target;
+        storm += (1.0f - std::exp (-(float) n / (float) (4.0 * sr))) * (target - storm);
+    }
+
+    /** I parametri modulati: \p out = \p in con density, spray, size e tone spostati dal meteo. */
+    void apply (const Params& in, Params& out)
+    {
+        out = in;
+        const float a = juce::jlimit (0.0f, 1.0f, in.weatherAmt);
+        const float s = juce::jmax (0.0f, storm);
+        const float slowDepth = 0.5f + 0.5f * s;
+        const float gustDepth = 0.05f + 0.8f * s * s;
+        const float bias = s - 0.4f;       // la calma dirada e scurisce, la tempesta infittisce e schiarisce
+        const float g = gust.value();
+
+        const float densityOct = a * (1.3f * slowDepth * slow[0].value() + 1.0f * gustDepth * g + 1.0f * bias);
+        const float sizeOct    = a * (1.0f * slowDepth * slow[1].value() - 0.6f * gustDepth * g - 0.6f * bias);
+        const float sprayAdd   = a * (0.25f * slowDepth * slow[2].value() + 0.25f * gustDepth * g + 0.2f * bias);
+        const float toneOct    = a * (1.2f * slowDepth * slow[3].value() + 0.8f * gustDepth * g + 1.2f * bias);
+
+        out.density = juce::jlimit (1.0f, 80.0f, in.density * std::exp2 (densityOct));
+        out.sizeMs  = juce::jlimit (10.0f, 1500.0f, in.sizeMs * std::exp2 (sizeOct));
+        out.spray   = juce::jlimit (0.0f, 1.0f, in.spray + sprayAdd);
+        out.toneHz  = juce::jlimit (300.0f, 20000.0f, in.toneHz * std::exp2 (toneOct));
+        intensity = juce::jlimit (0.0f, 1.0f, 0.5f + 0.3f * densityOct);
+    }
+
+    /** Per l'interfaccia: 0 calma piatta, 1 tempesta piena (dopo l'ultimo apply). */
+    float getIntensity() const { return intensity; }
+    float getStorminess() const { return juce::jmax (0.0f, storm); }
+
+private:
+    /** Rumore liscio: punti casuali in -1..1, uniti da una curva senza spigoli. */
+    struct Noise
+    {
+        float a = 0.0f, b = 0.0f;
+        double t = 0.0;
+
+        void init (juce::Random& r) { a = r.nextFloat() * 2.0f - 1.0f; b = r.nextFloat() * 2.0f - 1.0f; t = r.nextDouble(); }
+
+        void advance (double dt, juce::Random& r)
+        {
+            t += dt;
+            while (t >= 1.0) { t -= 1.0; a = b; b = r.nextFloat() * 2.0f - 1.0f; }
+        }
+
+        float value() const
+        {
+            const float x = (float) t;
+            return a + (b - a) * x * x * (3.0f - 2.0f * x);
+        }
+    };
+
+    double sr = 44100.0;
+    juce::Random rng;
+    std::array<Noise, 4> slow;
+    Noise gust, mood;
+    float storm = -1.0f, intensity = 0.5f;
+};
+
+//==============================================================================
 class Engine
 {
 public:
@@ -190,6 +283,8 @@ public:
         -1 = vuoto. */
     std::array<std::atomic<float>, numVis> grainVis;
     std::atomic<float> scanVis { 0.0f };
+    /** Meteo, per l'interfaccia: intensita' 0..1 (0.5 = neutro), -1 se il meteo e' spento. */
+    std::atomic<float> weatherVis { -1.0f };
 
     Engine()
     {
@@ -220,6 +315,7 @@ public:
         reverb.setSampleRate (sr);
         shimL.prepare (sr);
         shimR.prepare (sr);
+        weather.prepare (sr);
         killFade = juce::jmax (32, (int) (0.006 * sr));
         killLeft = -1;
         reset();
@@ -246,7 +342,12 @@ public:
 
     /** Fissa il seme dei numeri casuali: due motori con lo stesso seme e gli stessi parametri danno
         la stessa uscita, campione per campione. Serve ai test; di norma il seme e' casuale. */
-    void setRandomSeed (juce::int64 seed) { rng.setSeed (seed); }
+    void setRandomSeed (juce::int64 seed)
+    {
+        rng.setSeed (seed);
+        weather.setSeed (seed + 7919);
+        weather.prepare (sr);
+    }
 
     //==========================================================================
     void noteOn (int note, float velocity, int lengthSamples = -1)
@@ -313,9 +414,18 @@ public:
     /** slots: numSlots puntatori, anche nullptr (slot vuoto). in* puo' essere nullptr (strumento).
         in e out non devono sovrapporsi. n <= maxBlock. */
     void processSlots (SampleData* const* slots, const float* inL, const float* inR,
-                       float* outL, float* outR, int n, const Params& p, double bpm)
+                       float* outL, float* outR, int n, const Params& params, double bpm)
     {
         jassert (n <= maxBlock);
+
+        // --- meteo: a quantita' zero si usano i parametri cosi' come sono
+        weather.advance (n, params);
+        const bool weatherOn = params.weatherAmt > 0.0f;
+        if (weatherOn)
+            weather.apply (params, weathered);
+        const Params& p = weatherOn ? weathered : params;
+        weatherVis.store (weatherOn ? weather.getIntensity() : -1.0f, std::memory_order_relaxed);
+
         std::fill (mixL.begin(), mixL.begin() + n, 0.0f);
         std::fill (mixR.begin(), mixR.begin() + n, 0.0f);
 
@@ -1084,6 +1194,8 @@ private:
 
     juce::Reverb reverb;
     OctaveUp shimL, shimR;
+    Weather weather;
+    Params weathered;
     float shLpL = 0.0f, shLpR = 0.0f, shHpL = 0.0f, shHpR = 0.0f, lastReverbSize = -1.0f, lastReverbDamp = -1.0f;
 };
 

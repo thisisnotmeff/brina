@@ -322,12 +322,73 @@ void MorphPad::mouseDoubleClick (const juce::MouseEvent&)
 }
 
 //==============================================================================
+void WeatherMeter::refresh()
+{
+    const float v = proc.engine.weatherVis.load (std::memory_order_relaxed);
+
+    if (v < 0.0f)
+        history.clear();
+    else
+    {
+        history.reserve (90);
+        if (history.size() >= 90)
+            history.erase (history.begin());
+        history.push_back (v);
+    }
+
+    if (v != intensity || v >= 0.0f)
+    {
+        intensity = v;
+        repaint();
+    }
+}
+
+void WeatherMeter::paint (juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat();
+    auto labels = area.removeFromBottom (12);
+    auto bar = area.reduced (0, 4);
+    const bool on = intensity >= 0.0f;
+
+    juce::ColourGradient sky (juce::Colour (0xff2c4a5c), bar.getX(), 0, juce::Colour (0xff5a3a52), bar.getRight(), 0, false);
+    sky.addColour (0.5, juce::Colour (0xff3b4a58));
+    g.setGradientFill (sky);
+    g.setOpacity (on ? 1.0f : 0.35f);
+    g.fillRoundedRectangle (bar, 3.0f);
+    g.setOpacity (1.0f);
+
+    // la scia degli ultimi tre secondi, poi il punto di adesso
+    for (size_t i = 0; i < history.size(); ++i)
+    {
+        const float alpha = 0.04f + 0.25f * (float) i / (float) juce::jmax<size_t> (1, history.size());
+        const float x = bar.getX() + history[i] * bar.getWidth();
+        g.setColour (ui::accent.withAlpha (alpha));
+        g.fillRect (x - 1.0f, bar.getY() + 2, 2.0f, bar.getHeight() - 4);
+    }
+
+    if (on)
+    {
+        const float x = bar.getX() + intensity * bar.getWidth();
+        g.setColour (ui::accent);
+        g.fillRoundedRectangle (x - 2.0f, bar.getY(), 4.0f, bar.getHeight(), 2.0f);
+    }
+
+    g.setColour (ui::dim);
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("calm", labels, juce::Justification::centredLeft);
+    if (! on)
+        g.drawText ("off", labels, juce::Justification::centred);
+    g.drawText ("storm", labels, juce::Justification::centredRight);
+}
+
+//==============================================================================
 BrinaEditor::BrinaEditor (BrinaProcessor& p)
-    : AudioProcessorEditor (p), proc (p), waveform (p), morphPad (p)
+    : AudioProcessorEditor (p), proc (p), waveform (p), morphPad (p), weatherMeter (p)
 {
     setLookAndFeel (&lookAndFeel);
     addAndMakeVisible (waveform);
     addAndMakeVisible (morphPad);
+    addAndMakeVisible (weatherMeter);
 
     addAndMakeVisible (loadButton);
     loadButton.onClick = [this] { openChooser(); };
@@ -406,7 +467,8 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
              { "gfxFilter", "Filter" }, { "gfxFilterFreq", "Cutoff" }, { "gfxFilterRes", "Reso" },
              { "gfxCrush", "Crush" }, { "gfxCrushAmt", "Amount" },
              { "gfxDrive", "Drive" }, { "gfxDriveAmt", "Amount" },
-             { "shapeChance", "Chance" }, { "morphAmt", "Amount" } })
+             { "shapeChance", "Chance" }, { "morphAmt", "Amount" },
+             { "weatherAmt", "Amount" }, { "weatherRate", "Rate" } })
         addKnob (id, title);
 
     addChoice ("genRate", "Rate");
@@ -415,6 +477,7 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     addChoice ("voiceMode", "Intervals");
     addChoice ("sourceMode", "Grains pick");
     addChoice ("grainShape", "Shape");
+    addChoice ("weatherMood", "Mood");
     choices[sourceModeChoice]->label.setJustificationType (juce::Justification::centredRight);
 
     knobs[voicesKnob]->slider.setTooltip ("Quanti grani nascono insieme per ogni nota (multigrain)");
@@ -426,6 +489,12 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
 
     choices[shapeChoice]->box.setTooltip ("Forma del grano: Swell sale piano e cade in fretta, Twin ha due gobbe, "
                                           "Tremolo pulsa, Pluck attacca secco e sfuma, Random sceglie a ogni grano");
+    knobs[weatherAmtKnob]->slider.setTooltip ("Quanto il meteo muove Density, Spray, Size e Tone. Le manopole restano "
+                                              "dove sono: il meteo lavora sopra di loro");
+    knobs[weatherRateKnob]->slider.setTooltip ("Quanto dura un ciclo lento del meteo; le raffiche sono sei volte piu' rapide");
+    choices[weatherMoodChoice]->box.setTooltip ("Calm dirada e scurisce, Breeze muove piano, Storm infittisce e schiarisce "
+                                                "con raffiche, Changing passa da sola dalla calma alla tempesta");
+    weatherMeter.setTooltip ("Il cielo adesso: da calmo (a sinistra) a tempestoso (a destra)");
     knobs[morphAmtKnob]->slider.setTooltip ("Quanti grani scelgono lo slot dal pad: 0 nessuno (decide Grains pick), 1 tutti");
     morphPad.setTooltip ("Morph: trascina il punto verso gli slot 1-4 agli angoli. Doppio clic: al centro");
     knobs[shapeChanceKnob]->slider.setTooltip ("Quanti grani prendono la forma scelta: 0 nessuno (la solita Hann), 1 tutti");
@@ -636,6 +705,19 @@ void BrinaEditor::resized()
             morphPad.setBounds (inner.withTrimmedTop (2).withSizeKeepingCentre (juce::jmin (inner.getWidth(), inner.getHeight() + 2),
                                                                                  inner.getHeight() + 2));
         }
+
+        sections.push_back ({ "WEATHER  -  slow drifting skies", row });
+        {
+            auto inner = content (row);
+            placeKnob (weatherAmtKnob, inner.removeFromLeft (72));
+            placeKnob (weatherRateKnob, inner.removeFromLeft (72));
+            auto right = inner.reduced (8, 0);
+            auto& mood = *choices[weatherMoodChoice];
+            mood.label.setBounds (right.removeFromTop (14));
+            mood.box.setBounds (right.removeFromTop (26).withTrimmedTop (2));
+            right.removeFromTop (8);
+            weatherMeter.setBounds (right.removeFromTop (34));
+        }
     }
 
     // --- Drift (generatore di note)
@@ -678,6 +760,7 @@ void BrinaEditor::timerCallback()
 {
     waveform.refresh();
     morphPad.refresh();
+    weatherMeter.refresh();
 
     const bool rec = proc.isRecording();
     recButton.setToggleState (rec, juce::dontSendNotification);
@@ -721,6 +804,9 @@ void BrinaEditor::timerCallback()
     knobs[firstGrainFxKnob + 4]->slider.setEnabled (crushOn);
     knobs[firstGrainFxKnob + 6]->slider.setEnabled (driveOn);
     choices[shapeChoice]->box.setEnabled (value ("shapeChance") > 0.0f);
+    const bool weatherOn = value ("weatherAmt") > 0.0f;
+    knobs[weatherRateKnob]->slider.setEnabled (weatherOn);
+    choices[weatherMoodChoice]->box.setEnabled (weatherOn);
 
     juce::String text = status;
 

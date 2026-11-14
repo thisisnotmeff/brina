@@ -78,6 +78,24 @@ scelto a caso), e un grano puo' riceverne piu' d'uno. *Filter* passa-basso, con 
 grano ha un taglio un po' diverso) e *Reso* · *Crush* riduzione di bit e di frequenza, con
 *Amount* · *Drive* saturazione, con *Amount*.
 
+**Shape** - la forma (l'inviluppo) dei grani. *Shape* sceglie la forma: *Swell* sale piano e
+cade in fretta, *Twin* ha due gobbe, *Tremolo* pulsa, *Pluck* attacca secco e sfuma, *Random* ne
+sceglie una a ogni grano · *Chance* quanti grani la ricevono (0 = tutti con la solita forma
+morbida, 1 = tutti con quella scelta). Ogni forma ha lo stesso volume della forma normale.
+
+**Morph** - un pad XY con gli slot *1-4* agli angoli (1 e 2 in alto, 3 e 4 in basso): piu' il
+punto e' vicino a un angolo, piu' grani leggono da quello slot. *Amount* quanti grani seguono il
+pad (0 = nessuno, decide *Grains pick*; 1 = tutti). Gli slot vuoti non vengono mai scelti; gli
+angoli si accendono con i grani che stanno leggendo da li'. Doppio clic sul pad: torna al centro.
+Il punto e' fatto di due parametri (*Morph X*, *Morph Y*), quindi si puo' automatizzare in Live.
+
+**Weather** - un meteo lento che muove da solo *Density*, *Spray*, *Size* e il *Tone* del nastro,
+con cambi lenti e raffiche piu' rapide. Le manopole restano dove sono: il meteo lavora sopra di
+loro, quindi non disturba le automazioni. *Amount* quanto si muove (0 = spento) · *Rate* durata di
+un ciclo lento, da 30 s a 20 minuti · *Mood*: *Calm* dirada e scurisce, *Breeze* muove piano,
+*Storm* infittisce e schiarisce con raffiche, *Changing* passa da solo dalla calma alla tempesta.
+La striscia sotto *Mood* mostra il cielo di adesso.
+
 **Drift** - generatore di note: passeggiata casuale sulla scala scelta. *Rate* passo (legato al
 tempo di Live) · *Chance* probabilita' di una nota a ogni passo · *Root / Scale* tonalita' ·
 *Octave / Range* registro ed estensione · *Length* durata delle note in passi.
@@ -90,7 +108,8 @@ I campioni dei quattro slot vengono salvati col progetto di Live: i file come pe
 registrazioni dentro il set (FLAC).
 
 I set salvati con le versioni precedenti si aprono e suonano come prima: il loro campione e'
-nello slot 1, con una voce sola e nessun effetto per grano.
+nello slot 1, con una voce sola e nessun effetto per grano. Shape, Morph e Weather partono spenti:
+finche' non li si alza, il suono e' identico a prima.
 
 ## Sviluppo
 
