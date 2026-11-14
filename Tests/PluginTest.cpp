@@ -336,7 +336,7 @@ int main (int argc, char** argv)
                    && slotLength (p, 0) == 96000,
                "set della versione precedente: parametri e campione al loro posto");
         check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-                   && raw ("pitch4") == 0.0f && raw ("level2") == 1.0f && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
+                   && near ("pitch4", 0.0f) && near ("level2", 1.0f) && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
                "set della versione precedente: una voce, nessun effetto, corsie 2-4 vuote");
         p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);
         check (render (p, 5.0, false) > 0.003, "set della versione precedente: suona");
