@@ -1,38 +1,41 @@
-# Brina — istruzioni per Claude
+# Brina — instructions for Claude
 
-Plugin granulare ambient per Ableton Live (macOS), ispirato a GrainBrick. Always reply in English.
+Ambient granular plugin for Ableton Live (macOS), inspired by GrainBrick.
 
-## Struttura
-- `Source/Engine.h` — tutto il DSP (grani, generatore Drift, nastro, delay, riverbero shimmer). Indipendente dall'host: nessuna dipendenza da `AudioProcessor`.
-- `Source/PluginProcessor.*` — parametri (`createLayout`), MIDI, caricamento file, registrazione (solo FX, max 60 s), salvataggio stato.
-- `Source/PluginEditor.*` — interfaccia (forma d'onda cliccabile; sezioni Grains / Drift / Tape / Delay / Reverb / Out).
-- `Tests/EngineTest.cpp` (motore, senza host) e `Tests/PluginTest.cpp` (plugin, eseguito per Brina e Brina FX).
-- Due plugin dallo stesso codice, selezionati da `BRINA_FX` (0 = strumento "Brina", 1 = effetto "Brina FX").
+## Language
+- Chat with the maintainer: Italian.
+- Everything in this repository is in English: documentation, code comments, commit messages, PR descriptions. Existing Italian comments and docs are being translated gradually; write all new text in English.
 
-## Build e test (da eseguire prima di ogni modifica e dopo)
+## Layout
+- `Source/Engine.h` — all the DSP (grains, Drift note generator, tape, delay, shimmer reverb). Host-independent: no dependency on `AudioProcessor`.
+- `Source/PluginProcessor.*` — parameters (`createLayout`), MIDI, file loading, recording (FX only, max 60 s), state saving.
+- `Source/PluginEditor.*` — UI (clickable waveform; Grains / Drift / Tape / Delay / Reverb / Out sections).
+- `Tests/EngineTest.cpp` (engine, no host) and `Tests/PluginTest.cpp` (plugin, run for both Brina and Brina FX).
+- Two plugins from the same code, selected by `BRINA_FX` (0 = instrument "Brina", 1 = effect "Brina FX").
+
+## Build and test (run before and after every change)
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBRINA_INSTALL=OFF -DBRINA_TESTS=ON
     cmake --build build --config Release --parallel 4
     ./build/BrinaTest_artefacts/Release/BrinaTest
     ./build/BrinaPluginTest_artefacts/Release/BrinaPluginTest /tmp
     ./build/BrinaFXPluginTest_artefacts/Release/BrinaFXPluginTest /tmp
 
-- La CI (`.github/workflows/build.yml`) fa lo stesso su macOS a ogni push e produce `Brina-macOS.zip` in Actions. Il workspace Linux di Claude non compila il target macOS (VST3/AU): per il motore si può compilare `BrinaTest`, la verifica completa è la CI.
-- Target macOS 10.15, universal (arm64 + x86_64), C++17, JUCE 8.0.17-security via FetchContent.
-- Non usare `BRINA_INSTALL=ON` fuori dal Mac dell'utente (copia in `~/Library/Audio/Plug-Ins`).
+- CI (`.github/workflows/build.yml`) does the same on macOS on every push and produces `Brina-macOS.zip` in Actions. Claude's Linux workspace cannot build the macOS targets (VST3/AU); the engine test (`BrinaTest`) can be built there, the full check is CI.
+- Targets macOS 10.15, universal (arm64 + x86_64), C++17, JUCE 8.0.17-security via FetchContent.
+- Never use `BRINA_INSTALL=ON` outside the maintainer's Mac (it copies into `~/Library/Audio/Plug-Ins`).
 
-## Regole inviolabili
-1. **Thread audio**: nessuna allocazione, nessun lock bloccante, niente I/O. Il passaggio del campione usa solo `SpinLock::ScopedTryLockType` (se il lock non è libero si riprova al blocco dopo). I buffer si dimensionano in `prepare` (`Engine::maxBlock = 2048`).
-2. **Compatibilità dei parametri**: ID, ordine, intervalli e default dei parametri esistenti non cambiano mai (rompono i set salvati di Live). Le funzioni nuove si aggiungono **in coda** a `createLayout`, con `ParameterID { id, 1 }` e in coda anche all'array `raw`. Vedi `docs/parametri.md`.
-3. **Stato salvato**: `getStateInformation` / `setStateInformation` devono continuare a leggere i set vecchi (parametri mancanti → default).
-4. **Test**: devono passare prima di ogni modifica. Una funzione nuova porta con sé un test (motore → `EngineTest.cpp`, parametri/stato → `PluginTest.cpp`).
-5. `Engine.h` resta indipendente dall'host. Limiti attuali: 12 voci, 160 grani.
-6. Il risultato sonoro non è verificabile da Claude: per il DSP si controllano numericamente picco, RMS, valori finiti (NaN/inf), denormali, stabilità del feedback e intonazione; l'ascolto lo fa l'utente in Live.
+## Hard rules
+1. **Audio thread**: no allocation, no blocking locks, no I/O. Sample hand-off uses only `SpinLock::ScopedTryLockType` (if the lock is busy, retry on the next block). Buffers are sized in `prepare` (`Engine::maxBlock = 2048`).
+2. **Parameter compatibility**: IDs, order, ranges and defaults of existing parameters never change (it would break saved Live sets). New features are appended **at the end** of `createLayout`, with `ParameterID { id, 1 }`, and also at the end of the `raw` array. See `docs/parametri.md`.
+3. **Saved state**: `getStateInformation` / `setStateInformation` must keep loading old sets (missing parameters fall back to defaults).
+4. **Tests**: they must pass before every change. A new feature comes with a test (engine → `EngineTest.cpp`, parameters/state → `PluginTest.cpp`).
+5. `Engine.h` stays host-independent. Current limits: 12 voices, 160 grains.
+6. Claude cannot judge how it sounds: for DSP, check numerically peak, RMS, finite values (NaN/inf), denormals, feedback stability and tuning; the maintainer listens in Live.
 
-## Convenzioni
-- Un branch per funzione, commit piccoli. Non lavorare direttamente su `main`.
-- Code comments: existing ones are in Italian; write new ones in English.
-- Aggiorna `README.md` (sezione "Come si usa") e `docs/parametri.md` quando cambia un parametro.
+## Conventions
+- One branch per feature, small commits. Never work directly on `main`.
+- Update `README.md` ("Come si usa" section) and `docs/parametri.md` whenever a parameter changes.
 
-## Idee future
-- Funzioni richieste: multigrain, effetti per grano.
-- Versione app iPad con iOS 12.5.8: va compilata con Xcode 16, solo installazione manuale.
+## Future ideas
+- Requested features: multigrain, per-grain effects.
+- iPad app for iOS 12.5.8: must be built with Xcode 16, manual install only.
