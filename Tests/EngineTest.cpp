@@ -362,6 +362,60 @@ int main()
             check (c.finite && c.rms > 0.01 && c.peak < 1.5 && c.rms != a.rms, "Grain Drive", c);
             check (d.finite && d.rms > 0.01 && d.peak < 1.5, "Grain Filter, risonanza al massimo", d);
         }
+        // ------------------------------------------------------------------ forme del grano
+        {   // 18. ogni forma parte e finisce a zero e ha l'energia della Hann
+            Engine e;
+            const float* hann = e.windowTable (0);
+            double ref = 0;
+            for (int i = 0; i <= Engine::windowSize; ++i) ref += (double) hann[i] * hann[i];
+
+            bool ok = true;
+            juce::String detail;
+            for (int s = 1; s < Engine::numShapes; ++s)
+            {
+                const float* w = e.windowTable (s);
+                double energy = 0, peak = 0;
+                bool finite = true;
+                for (int i = 0; i <= Engine::windowSize; ++i)
+                {
+                    finite = finite && std::isfinite (w[i]) && w[i] >= 0.0f;
+                    energy += (double) w[i] * w[i];
+                    peak = std::max (peak, (double) w[i]);
+                }
+                // i primi e gli ultimi campioni restano piccolissimi: il grano entra ed esce senza click
+                const bool edges = std::abs (w[0]) < 1e-6f && std::abs (w[Engine::windowSize]) < 1e-6f
+                                   && std::abs (w[1]) < 0.01f && std::abs (w[Engine::windowSize - 1]) < 0.01f;
+                const bool same = std::abs (energy / ref - 1.0) < 1e-3;
+                if (! (finite && edges && same && peak < 2.0)) { ok = false; detail << " " << s; }
+            }
+            Stats none;
+            check (ok, ("forme: zero agli estremi, energia della Hann" + detail).toRawUTF8(), none);
+        }
+        {   // 19. a probabilita' zero la forma non conta: uscita identica, campione per campione
+            Params p;
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (91);
+            auto a = run (plain, sample.get(), p, sr, 8.0, 512);
+            p.grainShape = 3;
+            Engine same; same.prepare (sr); same.setRandomSeed (91);
+            auto b = run (same, sample.get(), p, sr, 8.0, 512);
+            check (a.rms == b.rms && a.peak == b.peak && a.zeroCrossHz == b.zeroCrossHz, "Shape Chance a 0: suono invariato", b);
+        }
+        {   // 20. ogni forma su tutti i grani: suona, cambia il suono, il volume resta vicino
+            Params p = cleanParams();
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (5); plain.noteOn (60, 1.0f);
+            auto a = run (plain, sample.get(), p, sr, 4.0, 512);
+
+            for (int shape = 0; shape < (int) shapeNames().size(); ++shape)
+            {
+                Params q = p; q.shapeChance = 1.0f; q.grainShape = shape;
+                Engine e; e.prepare (sr); e.setRandomSeed (5); e.noteOn (60, 1.0f);
+                auto b = run (e, sample.get(), q, sr, 4.0, 512);
+                const juce::String name = "forma " + shapeNames()[shape] + ": suona, volume simile";
+                check (b.finite && b.peak < 1.5 && b.rms != a.rms && b.rms > 0.6 * a.rms && b.rms < 1.6 * a.rms
+                           && std::abs (b.zeroCrossHz - 440.0) < 30.0,
+                       name.toRawUTF8(), b);
+            }
+        }
         {   // 17. tutto al massimo con otto voci, quattro slot e tutti gli effetti: nessuna esplosione
             Engine e; e.prepare (sr); Params p;
             p.density = 80; p.sizeMs = 1500; p.octaves = 1; p.drive = 1; p.wow = 1; p.delayFeedback = 0.95f;
@@ -369,6 +423,7 @@ int main()
             p.genProb = 1; p.genLength = 8; p.dry = 1; p.volumeDb = 0;
             p.grainVoices = 8; p.voiceSpread = 1; p.voiceMode = 3; p.sourceMode = 0;
             p.gfxFilterChance = p.gfxCrushChance = p.gfxDriveChance = 1; p.gfxFilterRes = 1; p.gfxCrush = 1; p.gfxDrive = 1;
+            p.shapeChance = 1; p.grainShape = 4;
             SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), high.get() };
             for (int n = 48; n < 60; ++n) e.noteOn (n, 1.0f);
 

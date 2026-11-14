@@ -81,9 +81,16 @@ static void checkOldParameters (BrinaProcessor& p, bool fx)
         tail = tail && params[i]->getVersionHint() > 1;
 
     auto raw = [&p] (const char* id) { auto* v = p.apvts.getRawParameterValue (id); return v != nullptr ? v->load() : -1.0f; };
-    check (tail && params.size() == (int) std::size (old) + 11
-               && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f,
-           "parametri nuovi in coda; default: una voce, nessun effetto per grano");
+    check (tail && params.size() == (int) std::size (old) + 11 + 2
+               && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
+               && raw ("shapeChance") == 0.0f,
+           "parametri nuovi in coda; default: una voce, nessun effetto per grano, nessuna forma");
+
+    // i parametri della seconda versione restano dove sono: la terza va in coda
+    bool v3Last = true;
+    for (int i = (int) std::size (old) + 11; i < params.size(); ++i)
+        v3Last = v3Last && params[i]->getVersionHint() == 3;
+    check (v3Last, "forma, morph e meteo in coda, con versione 3");
 }
 
 int main (int argc, char** argv)
@@ -189,6 +196,9 @@ int main (int argc, char** argv)
         setParam ("gfxFilter", 0.5f); setParam ("gfxCrush", 0.5f); setParam ("gfxDrive", 0.5f);
         check (p.apvts.getRawParameterValue ("voices")->load() == 8.0f, "Grain Voices arriva a 8");
         check (render (p, 3.0, false, true) > 0.003, "8 voci, 2 slot ed effetti per grano: suona");
+        setParam ("grainShape", 1.0f); setParam ("shapeChance", 1.0f);     // Random su tutti i grani
+        check (p.apvts.getRawParameterValue ("grainShape")->load() == 4.0f && render (p, 2.0, false) > 0.003,
+               "forma Random su tutti i grani: suona");
 
         bool sawFirst = false, sawThird = false, sawOther = false;
         for (int i = 0; i < 40; ++i)
@@ -298,6 +308,7 @@ int main (int argc, char** argv)
         p.loadFile (wav2, 1);       // qualcosa di gia' caricato negli altri slot deve sparire
         p.apvts.getParameter ("voices")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("gfxDrive")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("shapeChance")->setValueNotifyingHost (1.0f);
         p.setStateInformation (oldState.getData(), (int) oldState.getSize());
 
         auto raw = [&p] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
@@ -306,6 +317,7 @@ int main (int argc, char** argv)
                    && slotLength (p, 0) == 96000,
                "set della versione precedente: parametri e campione al loro posto");
         check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
+                   && raw ("shapeChance") == 0.0f
                    && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
                "set della versione precedente: una voce, nessun effetto, slot 2-4 vuoti");
         p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);

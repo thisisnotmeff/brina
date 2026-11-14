@@ -57,7 +57,28 @@ struct Params
     float gfxFilterChance = 0.0f, gfxFilterHz = 1500.0f, gfxFilterRes = 0.3f;
     float gfxCrushChance = 0.0f, gfxCrush = 0.5f;
     float gfxDriveChance = 0.0f, gfxDrive = 0.5f;
+    // Forma del grano: probabilita' che un grano usi la forma scelta invece della solita Hann
+    int   grainShape = 0;         // vedi shapeNames()
+    float shapeChance = 0.0f;
+    // Morph: i quattro slot stanno agli angoli di un pad XY; con probabilita' morphAmt il grano sceglie
+    // lo slot secondo i pesi bilineari di (morphX, morphY), altrimenti secondo sourceMode
+    float morphX = 0.5f, morphY = 0.5f, morphAmt = 0.0f;
+    // Meteo: modulazione lenta di density, spray, size e tone (le manopole non si muovono)
+    float weatherAmt = 0.0f, weatherRate = 180.0f;   // secondi per un ciclo lento
+    int   weatherMood = 1;        // vedi weatherMoodNames()
 };
+
+inline const juce::StringArray& shapeNames()
+{
+    static const juce::StringArray n { "Swell", "Twin", "Tremolo", "Pluck", "Random" };
+    return n;
+}
+
+inline const juce::StringArray& weatherMoodNames()
+{
+    static const juce::StringArray n { "Calm", "Breeze", "Storm", "Changing" };
+    return n;
+}
 
 inline const juce::StringArray& rateNames()
 {
@@ -173,9 +194,14 @@ public:
     Engine()
     {
         for (auto& v : grainVis) v.store (-1.0f);
-        for (int i = 0; i <= windowSize; ++i)
-            window[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) windowSize);
+        buildWindows();
     }
+
+    static constexpr int windowSize = 2048;
+    static constexpr int numShapes = 5;     // tabella 0 = Hann, 1..4 = le forme di shapeNames() tranne Random
+
+    /** Finestra del grano: 0 = Hann, 1 = Swell, 2 = Twin, 3 = Tremolo, 4 = Pluck. windowSize + 1 valori. */
+    const float* windowTable (int shape) const { return windows[(size_t) juce::jlimit (0, numShapes - 1, shape)].data(); }
 
     void prepare (double sampleRate)
     {
@@ -391,6 +417,7 @@ private:
     {
         bool active = false;
         int slot = 0;
+        const float* win = nullptr;    // tabella della finestra, scelta alla nascita
         double pos = 0.0, inc = 1.0;
         float winPhase = 0.0f, winInc = 0.0f;
         float gainL = 0.0f, gainR = 0.0f;
@@ -557,7 +584,68 @@ private:
         g->gainR = amp * std::sin (pan * juce::MathConstants<float>::halfPi);
         g->remaining = grainLen;
         g->delay = offset;
+        g->win = windows[0].data();
         assignGrainFx (*g, p);
+        assignShape (*g, p);
+    }
+
+    /** Con probabilita' shapeChance il grano prende la forma scelta (Random: una delle quattro a caso).
+        A probabilita' zero non si estrae nessun numero: la sequenza casuale resta quella di prima. */
+    void assignShape (Grain& g, const Params& p)
+    {
+        if (p.shapeChance <= 0.0f || rng.nextFloat() >= p.shapeChance)
+            return;
+
+        const int choice = juce::jlimit (0, numShapes - 1, p.grainShape);   // 4 = Random
+        const int table = choice < numShapes - 1 ? choice + 1 : 1 + rng.nextInt (numShapes - 1);
+        g.win = windows[(size_t) table].data();
+    }
+
+    /** Le finestre partono e finiscono a zero (niente click) e hanno la stessa energia della Hann,
+        cosi' cambiare forma non cambia il volume. */
+    void buildWindows()
+    {
+        const float pi = juce::MathConstants<float>::pi;
+        auto hannAt = [pi] (float x) { const float s = std::sin (pi * x); return s * s; };
+
+        // sale piano e cade in fretta (o il contrario): una mezza Hann per lato
+        auto asym = [pi] (float x, float peak)
+        {
+            if (x < peak) return 0.5f - 0.5f * std::cos (pi * x / peak);
+            return 0.5f + 0.5f * std::cos (pi * (x - peak) / (1.0f - peak));
+        };
+
+        for (int i = 0; i <= windowSize; ++i)
+        {
+            const float x = (float) i / (float) windowSize;
+            const float hann = hannAt (x);
+            const float pluckTail = x < 0.03f ? 0.0f : (1.0f - (x - 0.03f) / 0.97f);
+
+            // la Hann con la stessa formula di sempre: i set salvati suonano identici, bit per bit
+            windows[0][(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) windowSize);
+            windows[1][(size_t) i] = asym (x, 0.85f);                                                    // Swell
+            windows[2][(size_t) i] = hann * (0.3f + 0.7f * hannAt (2.0f * x));                           // Twin
+            windows[3][(size_t) i] = hann * (0.55f + 0.45f * std::cos (juce::MathConstants<float>::twoPi * 6.0f * x)); // Tremolo
+            windows[4][(size_t) i] = x < 0.03f ? asym (x / 0.03f * 0.5f, 0.5f)                          // Pluck
+                                               : pluckTail * pluckTail * pluckTail;
+        }
+
+        windows[1][0] = windows[1][(size_t) windowSize] = 0.0f;
+        windows[4][(size_t) windowSize] = 0.0f;
+
+        auto energy = [] (const std::array<float, windowSize + 1>& w)
+        {
+            double sum = 0.0;
+            for (auto v : w) sum += (double) v * v;
+            return sum;
+        };
+
+        const double reference = energy (windows[0]);
+        for (int s = 1; s < numShapes; ++s)
+        {
+            const float gain = (float) std::sqrt (reference / energy (windows[(size_t) s]));
+            for (auto& v : windows[(size_t) s]) v *= gain;
+        }
     }
 
     void assignGrainFx (Grain& g, const Params& p)
@@ -732,7 +820,7 @@ private:
             for (; i < n && g.remaining > 0; ++i, --g.remaining)
             {
                 const int wi = (int) g.winPhase;
-                const float w = window[(size_t) juce::jmin (wi, windowSize)];
+                const float w = g.win[juce::jmin (wi, windowSize)];
 
                 const int i1 = (int) g.pos;
                 const float f = (float) (g.pos - (double) i1);
@@ -919,8 +1007,7 @@ private:
     }
 
     //==========================================================================
-    static constexpr int windowSize = 2048;
-    std::array<float, windowSize + 1> window {};
+    std::array<std::array<float, windowSize + 1>, numShapes> windows {};
 
     double sr = 44100.0;
     std::array<Voice, maxVoices> voices;

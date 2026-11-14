@@ -84,8 +84,9 @@ private:
 
     // posizioni in "knobs" e "choices", nell'ordine in cui vengono creati
     enum KnobIndex { scanKnob = 9, firstDriftKnob = 12, firstFxKnob = 16, dryKnob = 26,
-                     voicesKnob = 28, voiceSpreadKnob = 29, firstGrainFxKnob = 30, numGrainFxKnobs = 7 };
-    enum ChoiceIndex { numDriftChoices = 3, voiceModeChoice = 3, sourceModeChoice = 4 };
+                     voicesKnob = 28, voiceSpreadKnob = 29, firstGrainFxKnob = 30, numGrainFxKnobs = 7,
+                     shapeChanceKnob = 37 };
+    enum ChoiceIndex { numDriftChoices = 3, voiceModeChoice = 3, sourceModeChoice = 4, shapeChoice = 5 };
 
     Knob& addKnob (const char* paramId, const char* title);
     Choice& addChoice (const char* paramId, const char* title);

@@ -110,6 +110,12 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     add ("gfxDrive",      "Grain Drive Chance",  Range (0.0f, 1.0f), 0.0f);
     add ("gfxDriveAmt",   "Grain Drive Amount",  Range (0.0f, 1.0f), 0.5f);
 
+    // --- Forme del grano, Morph e Meteo. Di default sono spenti (probabilita' e quantita' a zero):
+    // i set salvati prima suonano identici, campione per campione.
+    version = 3;
+    addChoice ("grainShape", "Grain Shape", brina::shapeNames(), 0);
+    add ("shapeChance", "Shape Chance", Range (0.0f, 1.0f), 0.0f);
+
     return layout;
 }
 
@@ -133,7 +139,8 @@ BrinaProcessor::BrinaProcessor()
             get ("play"), get ("kill"), get ("posMode"),
             get ("voices"), get ("voiceSpread"), get ("voiceMode"), get ("sourceMode"),
             get ("gfxFilter"), get ("gfxFilterFreq"), get ("gfxFilterRes"),
-            get ("gfxCrush"), get ("gfxCrushAmt"), get ("gfxDrive"), get ("gfxDriveAmt") };
+            get ("gfxCrush"), get ("gfxCrushAmt"), get ("gfxDrive"), get ("gfxDriveAmt"),
+            get ("grainShape"), get ("shapeChance") };
 }
 
 bool BrinaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -181,6 +188,7 @@ void BrinaProcessor::readParams (brina::Params& p) const
     p.gfxFilterChance = f (raw.gfxFilter); p.gfxFilterHz = f (raw.gfxFilterFreq); p.gfxFilterRes = f (raw.gfxFilterRes);
     p.gfxCrushChance = f (raw.gfxCrush);   p.gfxCrush = f (raw.gfxCrushAmt);
     p.gfxDriveChance = f (raw.gfxDrive);   p.gfxDrive = f (raw.gfxDriveAmt);
+    p.grainShape = i (raw.grainShape);     p.shapeChance = f (raw.shapeChance);
 }
 
 //==============================================================================

@@ -298,7 +298,8 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
              { "voices", "Voices" }, { "voiceSpread", "Spread" },
              { "gfxFilter", "Filter" }, { "gfxFilterFreq", "Cutoff" }, { "gfxFilterRes", "Reso" },
              { "gfxCrush", "Crush" }, { "gfxCrushAmt", "Amount" },
-             { "gfxDrive", "Drive" }, { "gfxDriveAmt", "Amount" } })
+             { "gfxDrive", "Drive" }, { "gfxDriveAmt", "Amount" },
+             { "shapeChance", "Chance" } })
         addKnob (id, title);
 
     addChoice ("genRate", "Rate");
@@ -306,6 +307,7 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     addChoice ("genScale", "Scale");
     addChoice ("voiceMode", "Intervals");
     addChoice ("sourceMode", "Grains pick");
+    addChoice ("grainShape", "Shape");
     choices[sourceModeChoice]->label.setJustificationType (juce::Justification::centredRight);
 
     knobs[voicesKnob]->slider.setTooltip ("Quanti grani nascono insieme per ogni nota (multigrain)");
@@ -314,6 +316,10 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
                                               "Chord (terze sulla scala di Drift)");
     choices[sourceModeChoice]->box.setTooltip ("Da quale slot legge ogni grano: Random a caso, Cycle a rotazione, "
                                                "Per Voice una sorgente fissa per ogni voce");
+
+    choices[shapeChoice]->box.setTooltip ("Forma del grano: Swell sale piano e cade in fretta, Twin ha due gobbe, "
+                                          "Tremolo pulsa, Pluck attacca secco e sfuma, Random sceglie a ogni grano");
+    knobs[shapeChanceKnob]->slider.setTooltip ("Quanti grani prendono la forma scelta: 0 nessuno (la solita Hann), 1 tutti");
 
     for (int i : { 0, 3, 5 })
         knobs[firstGrainFxKnob + i]->slider.setTooltip ("Quanti grani ricevono l'effetto: 0 nessuno, 1 tutti. "
@@ -325,7 +331,7 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     knobs[dryKnob]->slider.setVisible (BrinaProcessor::hasAudioInput());
     knobs[dryKnob]->label.setVisible (BrinaProcessor::hasAudioInput());
 
-    setSize (880, 752);
+    setSize (880, 878);
     startTimerHz (30);
 }
 
@@ -498,6 +504,21 @@ void BrinaEditor::resized()
         }
     }
 
+    // --- Shape (forma del grano), Morph, Weather
+    {
+        auto row = area.removeFromTop (sectionHeight);
+        area.removeFromTop (gap);
+
+        auto shape = row.removeFromLeft (214);
+        row.removeFromLeft (gap);
+        sections.push_back ({ "SHAPE  -  grain envelope", shape });
+        {
+            auto inner = content (shape);
+            placeKnob (shapeChanceKnob, inner.removeFromRight (72));
+            placeChoice (shapeChoice, inner.reduced (8, 0));
+        }
+    }
+
     // --- Drift (generatore di note)
     auto drift = area.removeFromTop (sectionHeight);
     area.removeFromTop (gap);
@@ -579,6 +600,7 @@ void BrinaEditor::timerCallback()
     knobs[firstGrainFxKnob + 2]->slider.setEnabled (filterOn);
     knobs[firstGrainFxKnob + 4]->slider.setEnabled (crushOn);
     knobs[firstGrainFxKnob + 6]->slider.setEnabled (driveOn);
+    choices[shapeChoice]->box.setEnabled (value ("shapeChance") > 0.0f);
 
     juce::String text = status;
 

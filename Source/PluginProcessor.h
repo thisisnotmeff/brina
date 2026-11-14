@@ -93,7 +93,8 @@ private:
                            *reverbSize, *reverbDamp, *shimmer, *reverbMix, *dry, *volume,
                            *play, *kill, *posMode,
                            *voices, *voiceSpread, *voiceMode, *sourceMode,
-                           *gfxFilter, *gfxFilterFreq, *gfxFilterRes, *gfxCrush, *gfxCrushAmt, *gfxDrive, *gfxDriveAmt;
+                           *gfxFilter, *gfxFilterFreq, *gfxFilterRes, *gfxCrush, *gfxCrushAmt, *gfxDrive, *gfxDriveAmt,
+                           *grainShape, *shapeChance;
     } raw {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BrinaProcessor)
