@@ -12,8 +12,8 @@ Sono due plugin con lo stesso motore:
 | **Brina** | traccia MIDI (strumento) | file audio |
 | **Brina FX** | traccia audio (effetto) | file audio oppure **Rec** dell'ingresso della traccia (max 60 s) |
 
-Le sorgenti audio sono quattro (**slot 1-4**): ogni grano legge da uno degli slot pieni, quindi
-si possono mescolare fino a quattro suoni diversi nella stessa nuvola.
+Le sorgenti audio sono quattro **corsie**, visibili tutte insieme: ogni corsia ha il suo campione
+e i suoi controlli dei grani, come quattro granulatori nello stesso plugin.
 
 ## Installazione
 
@@ -39,33 +39,31 @@ installati; per `/Library/...` aggiungi `sudo` davanti) e riapri Live con *Resca
 
 ## Come si usa
 
-1. Trascina un file audio sulla forma d'onda (o **Load**). In Brina FX puoi premere **Rec**
-   per catturare l'audio che passa nella traccia; mentre registri i grani suonano gia'.
-   Il file va nello slot selezionato nella riga **Source** (1-4); trascinando piu' file insieme
-   si riempiono gli slot uno dopo l'altro. **Clear** svuota lo slot selezionato.
+1. Trascina un file audio sulla forma d'onda di una corsia (o il suo **Load**). In Brina FX puoi
+   premere **Rec** per catturare in quella corsia l'audio che passa nella traccia; mentre registri
+   i grani suonano gia'. Trascinando piu' file insieme si riempiono le corsie una dopo l'altra.
+   **Clear** svuota la corsia.
 2. Con **Drift** acceso il plugin suona da solo. Spegnilo per suonare tu via MIDI
    (Do3 = intonazione originale). Per mandare MIDI a Brina FX: crea una traccia MIDI e
    imposta *MIDI To* sulla traccia audio.
-3. Clicca sulla forma d'onda per scegliere da dove nascono i grani.
+3. Clicca sulla forma d'onda di una corsia per scegliere da dove nascono i suoi grani.
 4. In alto: **Playing / Stopped** avvia e ferma il plugin (da fermo non nascono note ne' grani
    e le code sfumano da sole); **Kill** fa silenzio subito, azzerando note, grani e code di
    delay e riverbero. In Brina FX il segnale *Dry In* continua a passare in entrambi i casi.
-5. **Position: Auto / Fixed** (nella sezione Grains): in *Auto* la posizione scorre da sola alla
-   velocita' di *Scan* (come sempre); in *Fixed* resta ferma dove la metti.
+5. **Position: Auto / Fixed** (in alto, per tutte le corsie): in *Auto* la posizione scorre da
+   sola alla velocita' di *Scan* di ogni corsia (come sempre); in *Fixed* resta ferma dove la metti.
 
 I tre comandi sono parametri (*Play*, *Kill*, *Position Mode*), quindi si possono automatizzare
 o mappare a un controller in Live. *Kill* scatta a ogni cambio di valore.
 
-**Grains** - *Position* punto di lettura · *Spray* dispersione attorno al punto · *Size* durata
+**Corsie** - ognuna con i suoi controlli: *Position* punto di lettura · *Spray* dispersione attorno al punto · *Size* durata
 del grano · *Density* grani al secondo · *Pitch* trasposizione · *Detune* stonatura casuale ·
 *Octaves* probabilita' di grani a ±1 ottava · *Reverse* probabilita' di grani al contrario ·
 *Spread* apertura stereo · *Scan* velocita' con cui la posizione scorre da sola ·
-*Attack / Release* inviluppo delle note.
+*Attack / Release* inviluppo delle note · *Level* volume della corsia. Una corsia vuota non
+suona e ha i controlli sbiaditi, ma si puo' preparare prima di caricare il file.
 
-**Source** - gli slot *1-4* scelgono quale sorgente vedi e carichi (quelli pieni hanno il numero
-piu' chiaro). *Grains pick* decide da quale slot legge ogni grano: *Random* a caso, *Cycle* a
-rotazione, *Per Voice* una sorgente fissa per ogni voce. *Position*, *Spray* e *Scan* valgono per
-tutti gli slot, in proporzione alla loro durata.
+Le sezioni sotto le corsie valgono per tutte.
 
 **Voices** (multigrain) - *Voices* quanti grani nascono insieme per ogni nota, da 1 a 8: le voci
 si aprono a ventaglio attorno a *Position* e nello stereo, il volume resta lo stesso · *Spread*
@@ -86,11 +84,12 @@ tempo di Live) · *Chance* probabilita' di una nota a ogni passo · *Root / Scal
 come un nastro · **Reverb** con *Shimmer* (ottava sopra nel feedback) · **Out** *Dry In*
 (solo FX: segnale originale) e *Volume*.
 
-I campioni dei quattro slot vengono salvati col progetto di Live: i file come percorso, le
+I campioni delle quattro corsie vengono salvati col progetto di Live: i file come percorso, le
 registrazioni dentro il set (FLAC).
 
 I set salvati con le versioni precedenti si aprono e suonano come prima: il loro campione e'
-nello slot 1, con una voce sola e nessun effetto per grano.
+nella corsia 1, con una voce sola e nessun effetto per grano. La finestra si puo' ridimensionare
+trascinando l'angolo in basso a destra.
 
 ## Sviluppo
 

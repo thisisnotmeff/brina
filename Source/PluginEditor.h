@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include <map>
 
 namespace brina::ui
 {
@@ -11,6 +12,13 @@ const juce::Colour accent     { 0xff8fd6ea };
 const juce::Colour warm       { 0xffe8a87c };
 const juce::Colour text       { 0xffc8d3dc };
 const juce::Colour dim        { 0xff6f7d8a };
+
+/** Il colore di ogni corsia: forma d'onda, manopole e numero. */
+inline juce::Colour laneColour (int lane)
+{
+    static const juce::Colour colours[] { accent, warm, juce::Colour (0xffa8d59a), juce::Colour (0xffc3a6e8) };
+    return colours[(size_t) juce::jlimit (0, 3, lane)];
+}
 }
 
 //==============================================================================
@@ -23,11 +31,11 @@ public:
 };
 
 //==============================================================================
-/** Forma d'onda dello slot selezionato, con posizione, zona di spray, voci e grani attivi. */
+/** Forma d'onda di una corsia, con posizione, zona di spray, voci e grani attivi. */
 class WaveformView : public juce::Component
 {
 public:
-    explicit WaveformView (BrinaProcessor&);
+    WaveformView (BrinaProcessor&, int lane);
 
     void refresh();     // chiamato dal timer dell'editor
     void paint (juce::Graphics&) override;
@@ -41,8 +49,10 @@ public:
 private:
     void rebuildPeaks();
     void setPositionFromMouse (const juce::MouseEvent&);
+    juce::RangedAudioParameter* positionParam() const;
 
     BrinaProcessor& proc;
+    const int lane;
     brina::SampleData::Ptr sample;
     int lastLength = -1;
     std::vector<float> peakMin, peakMax;
@@ -61,9 +71,12 @@ public:
     void resized() override;
 
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
-    void fileDragEnter (const juce::StringArray&, int, int) override { waveform.dragHover = true; }
-    void fileDragExit (const juce::StringArray&) override { waveform.dragHover = false; }
-    void filesDropped (const juce::StringArray&, int, int) override;
+    void fileDragEnter (const juce::StringArray&, int x, int y) override { setDragLane (laneAt (x, y)); }
+    void fileDragMove (const juce::StringArray&, int x, int y) override  { setDragLane (laneAt (x, y)); }
+    void fileDragExit (const juce::StringArray&) override                { setDragLane (-1); }
+    void filesDropped (const juce::StringArray&, int x, int y) override;
+
+    static constexpr int defaultWidth = 1200, defaultHeight = 760;
 
 private:
     struct Knob
@@ -80,40 +93,55 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
     };
 
+    /** Una corsia: forma d'onda, Load / Rec / Clear e i suoi controlli dei grani. */
+    struct Lane
+    {
+        Lane (BrinaProcessor& p, int index) : wave (p, index) {}
+
+        WaveformView wave;
+        juce::TextButton load { "Load" }, rec { "Rec" }, clear { "Clear" };
+        juce::Label name;
+        std::vector<Knob*> knobs;           // nell'ordine di BrinaProcessor::laneParamBases()
+        juce::Rectangle<int> bounds, badge;
+        bool wasFull = true;
+    };
+
     struct Section { juce::String title; juce::Rectangle<int> bounds; };
 
-    // posizioni in "knobs" e "choices", nell'ordine in cui vengono creati
-    enum KnobIndex { scanKnob = 9, firstDriftKnob = 12, firstFxKnob = 16, dryKnob = 26,
-                     voicesKnob = 28, voiceSpreadKnob = 29, firstGrainFxKnob = 30, numGrainFxKnobs = 7 };
-    enum ChoiceIndex { numDriftChoices = 3, voiceModeChoice = 3, sourceModeChoice = 4 };
-
-    Knob& addKnob (const char* paramId, const char* title);
+    Knob& addKnob (const juce::String& paramId, const juce::String& title, juce::Colour colour = brina::ui::accent);
     Choice& addChoice (const char* paramId, const char* title);
+    Knob& knob (const juce::String& paramId) { return *knobById.at (paramId); }
+    Choice& choice (const juce::String& paramId) { return *choiceById.at (paramId); }
+    void placeKnob (Knob&, juce::Rectangle<int> cell);
+    void placeChoice (Choice&, juce::Rectangle<int> cell);
+
     void timerCallback() override;
-    void load (const juce::File&, int slot);
-    void openChooser();
-    void selectSlot (int slot);
-    int selectedSlot() const { return juce::jlimit (0, BrinaProcessor::numSlots - 1, proc.selectedSlot.load()); }
+    int laneAt (int x, int y) const;
+    void setDragLane (int lane);
+    void load (const juce::File&, int lane);
+    void openChooser (int lane);
+    void setStatus (const juce::String&);
 
     BrinaProcessor& proc;
     BrinaLookAndFeel lookAndFeel;
-    WaveformView waveform;
 
-    juce::TextButton loadButton { "Load" }, recButton { "Rec" }, clearButton { "Clear" };
-    std::array<juce::TextButton, BrinaProcessor::numSlots> slotButtons;
-    juce::Rectangle<int> sourceRow;
-    std::vector<juce::Rectangle<int>> dividers;
+    juce::OwnedArray<Lane> lanes;
+    juce::OwnedArray<Knob> knobs;
+    juce::OwnedArray<Choice> choices;
+    std::map<juce::String, Knob*> knobById;
+    std::map<juce::String, Choice*> choiceById;
+
     juce::TextButton playButton { "Playing" }, killButton { "Kill" }, positionButton { "Position: Auto" };
     juce::ToggleButton driftButton { "On" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> driftAttachment, playAttachment, positionAttachment;
-    juce::Label sampleLabel;
+    juce::Label statusLabel;
     juce::TooltipWindow tooltips { this, 600 };
 
-    juce::OwnedArray<Knob> knobs;
-    juce::OwnedArray<Choice> choices;
     std::vector<Section> sections;
+    std::vector<juce::Rectangle<int>> dividers;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String status;
+    juce::uint32 statusTime = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BrinaEditor)
 };

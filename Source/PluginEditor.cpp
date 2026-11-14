@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include <cstring>
 
 using namespace brina;
 
@@ -9,6 +10,7 @@ BrinaLookAndFeel::BrinaLookAndFeel()
     setColour (juce::Slider::textBoxTextColourId, ui::text);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+    setColour (juce::Slider::rotarySliderFillColourId, ui::accent);
     setColour (juce::Label::textColourId, ui::dim);
     setColour (juce::TextButton::buttonColourId, ui::panel);
     setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffc8443c));
@@ -33,7 +35,7 @@ void BrinaLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w,
     const float radius = juce::jmin (area.getWidth(), area.getHeight()) * 0.5f - 2.0f;
     const auto centre = area.getCentre();
     const float angle = startAngle + pos * (endAngle - startAngle);
-    const float stroke = 3.0f;
+    const float stroke = radius > 22.0f ? 3.0f : 2.5f;
 
     juce::Path track;
     track.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
@@ -46,28 +48,28 @@ void BrinaLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w,
                                : startAngle;
     juce::Path value;
     value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, juce::jmin (from, angle), juce::jmax (from, angle), true);
-    g.setColour (slider.isEnabled() ? ui::accent : ui::dim);
+    g.setColour (slider.isEnabled() ? slider.findColour (juce::Slider::rotarySliderFillColourId) : ui::dim);
     g.strokePath (value, juce::PathStrokeType (stroke, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    const auto tip = centre.getPointOnCircumference (radius - 7.0f, angle);
+    const auto tip = centre.getPointOnCircumference (radius - 6.0f, angle);
     g.setColour (ui::text);
     g.drawLine ({ centre.getPointOnCircumference (radius * 0.35f, angle), tip }, 2.0f);
 }
 
 //==============================================================================
-WaveformView::WaveformView (BrinaProcessor& p) : proc (p)
+WaveformView::WaveformView (BrinaProcessor& p, int laneIndex) : proc (p), lane (laneIndex)
 {
     setMouseCursor (juce::MouseCursor::CrosshairCursor);
 }
 
-static int shownSlot (BrinaProcessor& proc)
+juce::RangedAudioParameter* WaveformView::positionParam() const
 {
-    return juce::jlimit (0, BrinaProcessor::numSlots - 1, proc.selectedSlot.load());
+    return proc.apvts.getParameter (BrinaProcessor::laneParamId ("position", lane));
 }
 
 void WaveformView::refresh()
 {
-    auto now = proc.getSample (shownSlot (proc));
+    auto now = proc.getSample (lane);
     const int length = now != nullptr ? now->length.load() : 0;
 
     if (now != sample || length != lastLength)
@@ -116,8 +118,9 @@ void WaveformView::rebuildPeaks()
 void WaveformView::paint (juce::Graphics& g)
 {
     const auto area = getLocalBounds().toFloat();
-    g.setColour (ui::panel);
-    g.fillRoundedRectangle (area, 6.0f);
+    const auto colour = ui::laneColour (lane);
+    g.setColour (ui::background.withAlpha (0.6f));
+    g.fillRoundedRectangle (area, 4.0f);
 
     const float w = area.getWidth(), h = area.getHeight(), mid = h * 0.5f;
     const bool empty = sample == nullptr || lastLength <= 0;
@@ -125,42 +128,41 @@ void WaveformView::paint (juce::Graphics& g)
     if (empty)
     {
         g.setColour (ui::dim);
-        g.setFont (15.0f);
-        g.drawFittedText ("Slot " + juce::String (shownSlot (proc) + 1) + " vuoto. "
-                              + (BrinaProcessor::hasAudioInput()
-                                     ? "Trascina qui un file audio, premi Load, oppure Rec per registrare l'ingresso della traccia"
-                                     : "Trascina qui un file audio oppure premi Load"),
-                          getLocalBounds().reduced (20), juce::Justification::centred, 2);
+        g.setFont (juce::FontOptions (12.5f));
+        g.drawFittedText (BrinaProcessor::hasAudioInput()
+                              ? "Trascina qui un file audio, oppure Load o Rec"
+                              : "Trascina qui un file audio, oppure Load",
+                          getLocalBounds().reduced (10), juce::Justification::centred, 2);
     }
     else
     {
-        const float position = proc.apvts.getRawParameterValue ("position")->load();
-        const float spray = proc.apvts.getRawParameterValue ("spray")->load();
-        const float centre = position + proc.engine.scanVis.load();
+        auto value = [this] (const char* base) { return proc.apvts.getRawParameterValue (BrinaProcessor::laneParamId (base, lane))->load(); };
+        const float position = value ("position");
+        const float spray = value ("spray");
+        const float centre = position + proc.engine.scanVis[(size_t) lane].load();
         const float cx = (centre - std::floor (centre)) * w;
         const float half = spray * spray * 0.5f * w;
 
         // zona da cui nascono i grani
-        g.setColour (ui::accent.withAlpha (0.10f));
+        g.setColour (colour.withAlpha (0.12f));
         for (float offset : { -w, 0.0f, w })
             g.fillRect (juce::Rectangle<float> (cx - half + offset, 0.0f, half * 2.0f, h).getIntersection (area));
 
-        g.setColour (ui::accent.withAlpha (0.55f));
+        g.setColour (colour.withAlpha (0.6f));
         for (size_t x = 0; x < peakMax.size(); ++x)
         {
-            const float top = mid - peakMax[x] * mid * 0.95f;
-            const float bottom = mid - peakMin[x] * mid * 0.95f;
+            const float top = mid - peakMax[x] * mid * 0.92f;
+            const float bottom = mid - peakMin[x] * mid * 0.92f;
             g.fillRect ((float) x, top, 1.0f, juce::jmax (1.0f, bottom - top));
         }
 
-        // solo i grani che stanno leggendo da questo slot (il valore e' slot + posizione)
-        const float slot = (float) shownSlot (proc);
-        g.setColour (ui::warm);
+        // i grani di questa corsia (il valore e' corsia + posizione)
+        g.setColour (ui::text.withAlpha (0.8f));
         for (auto& vis : proc.engine.grainVis)
         {
-            const float p = vis.load (std::memory_order_relaxed) - slot;
+            const float p = vis.load (std::memory_order_relaxed) - (float) lane;
             if (p >= 0.0f && p < 1.0f)
-                g.fillRect (p * w - 1.0f, 6.0f, 2.0f, h - 12.0f);
+                g.fillRect (p * w - 0.75f, 3.0f, 1.5f, h - 6.0f);
         }
 
         // i punti di lettura delle altre voci, aperti a ventaglio attorno alla posizione
@@ -184,25 +186,25 @@ void WaveformView::paint (juce::Graphics& g)
 
     if (dragHover)
     {
-        g.setColour (ui::accent);
-        g.drawRoundedRectangle (area.reduced (1.0f), 6.0f, 2.0f);
+        g.setColour (colour);
+        g.drawRoundedRectangle (area.reduced (1.0f), 4.0f, 2.0f);
     }
 }
 
 void WaveformView::setPositionFromMouse (const juce::MouseEvent& e)
 {
-    if (auto* param = proc.apvts.getParameter ("position"))
+    if (auto* param = positionParam())
     {
         // tolgo lo scorrimento automatico (Scan), cosi' il cursore finisce dove si clicca
-        float v = (float) e.x / (float) juce::jmax (1, getWidth()) - proc.engine.scanVis.load();
+        float v = (float) e.x / (float) juce::jmax (1, getWidth()) - proc.engine.scanVis[(size_t) lane].load();
         v -= std::floor (v);
-        param->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, v));
+        param->setValueNotifyingHost (param->convertTo0to1 (juce::jlimit (0.0f, 1.0f, v)));
     }
 }
 
 void WaveformView::mouseDown (const juce::MouseEvent& e)
 {
-    if (auto* param = proc.apvts.getParameter ("position"))
+    if (auto* param = positionParam())
         param->beginChangeGesture();
     setPositionFromMouse (e);
 }
@@ -211,53 +213,15 @@ void WaveformView::mouseDrag (const juce::MouseEvent& e) { setPositionFromMouse 
 
 void WaveformView::mouseUp (const juce::MouseEvent&)
 {
-    if (auto* param = proc.apvts.getParameter ("position"))
+    if (auto* param = positionParam())
         param->endChangeGesture();
 }
 
 //==============================================================================
 BrinaEditor::BrinaEditor (BrinaProcessor& p)
-    : AudioProcessorEditor (p), proc (p), waveform (p)
+    : AudioProcessorEditor (p), proc (p)
 {
     setLookAndFeel (&lookAndFeel);
-    addAndMakeVisible (waveform);
-
-    addAndMakeVisible (loadButton);
-    loadButton.onClick = [this] { openChooser(); };
-
-    recButton.setClickingTogglesState (false);
-    recButton.onClick = [this]
-    {
-        status = {};
-        if (proc.isRecording()) proc.stopRecording();
-        else                    proc.startRecording (selectedSlot());
-    };
-    addChildComponent (recButton);
-    recButton.setVisible (BrinaProcessor::hasAudioInput());
-
-    // --- sorgenti: quattro slot, quello selezionato e' mostrato nella forma d'onda
-    for (int i = 0; i < BrinaProcessor::numSlots; ++i)
-    {
-        auto& b = slotButtons[(size_t) i];
-        b.setButtonText (juce::String (i + 1));
-        b.setColour (juce::TextButton::buttonColourId, ui::background);
-        b.setColour (juce::TextButton::buttonOnColourId, ui::accent);
-        b.setColour (juce::TextButton::textColourOnId, ui::background);
-        b.setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0)
-                             | (i < BrinaProcessor::numSlots - 1 ? juce::Button::ConnectedOnRight : 0));
-        b.setTooltip ("Slot " + juce::String (i + 1) + ": Load, Rec e il trascinamento caricano l'audio nello slot selezionato");
-        b.onClick = [this, i] { selectSlot (i); };
-        addAndMakeVisible (b);
-    }
-
-    clearButton.setColour (juce::TextButton::buttonColourId, ui::background);
-    clearButton.setTooltip ("Svuota lo slot selezionato");
-    clearButton.onClick = [this]
-    {
-        status = {};
-        proc.clearSlot (selectedSlot());
-    };
-    addAndMakeVisible (clearButton);
 
     // --- trasporto: Play/Stop (le code sfumano) e Kill (silenzio immediato)
     playButton.setClickingTogglesState (true);
@@ -273,59 +237,97 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     killButton.onClick = [this] { proc.triggerKill(); };
     addAndMakeVisible (killButton);
 
-    // --- posizione: Auto (scorre con Scan) oppure Fixed (ferma su Position)
+    // --- posizione: Auto (scorre con Scan) oppure Fixed (ferma su Position), per tutte le corsie
     positionButton.setClickingTogglesState (true);
     positionButton.setColour (juce::TextButton::buttonColourId, ui::background);
     positionButton.setColour (juce::TextButton::buttonOnColourId, ui::warm);
     positionButton.setColour (juce::TextButton::textColourOnId, ui::background);
-    positionButton.setTooltip ("Auto: la posizione scorre da sola (Scan). Fixed: resta ferma dove la metti");
+    positionButton.setTooltip ("Auto: in ogni corsia la posizione scorre da sola (Scan). Fixed: resta ferma dove la metti");
     addAndMakeVisible (positionButton);
     positionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "posMode", positionButton);
 
-    sampleLabel.setColour (juce::Label::textColourId, ui::text);
-    sampleLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (sampleLabel);
+    statusLabel.setColour (juce::Label::textColourId, ui::warm);
+    statusLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (statusLabel);
 
+    // --- le corsie
+    static const char* laneTitles[] { "Position", "Spray", "Size", "Density", "Pitch", "Detune", "Octaves",
+                                      "Reverse", "Spread", "Scan", "Attack", "Release", "Level" };
+    jassert (BrinaProcessor::laneParamBases().size() == (int) std::size (laneTitles));
+
+    for (int i = 0; i < BrinaProcessor::numSlots; ++i)
+    {
+        auto* lane = lanes.add (new Lane (proc, i));
+        const auto colour = ui::laneColour (i);
+
+        addAndMakeVisible (lane->wave);
+
+        for (auto* b : { &lane->load, &lane->rec, &lane->clear })
+        {
+            b->setColour (juce::TextButton::buttonColourId, ui::background);
+            addAndMakeVisible (*b);
+        }
+
+        lane->load.onClick = [this, i] { openChooser (i); };
+        lane->clear.onClick = [this, i] { setStatus ({}); proc.clearSlot (i); };
+        lane->clear.setTooltip ("Svuota la corsia");
+        lane->rec.setVisible (BrinaProcessor::hasAudioInput());
+        lane->rec.setTooltip ("Registra l'ingresso della traccia in questa corsia (max 60 s)");
+        lane->rec.onClick = [this, i]
+        {
+            setStatus ({});
+            if (proc.isRecording() && proc.getRecordingSlot() == i) proc.stopRecording();
+            else                                                    proc.startRecording (i);
+        };
+
+        lane->name.setColour (juce::Label::textColourId, ui::text);
+        lane->name.setFont (juce::FontOptions (12.5f));
+        lane->name.setMinimumHorizontalScale (0.7f);
+        addAndMakeVisible (lane->name);
+
+        for (int k = 0; k < (int) std::size (laneTitles); ++k)
+            lane->knobs.push_back (&addKnob (BrinaProcessor::laneParamId (BrinaProcessor::laneParamBases()[k], i),
+                                             laneTitles[k], colour));
+
+        lane->knobs.back()->slider.setTooltip ("Volume della corsia " + juce::String (i + 1));
+    }
+
+    // --- sezioni comuni a tutte le corsie
     for (auto [id, title] : std::initializer_list<std::pair<const char*, const char*>> {
-             { "position", "Position" }, { "spray", "Spray" }, { "size", "Size" }, { "density", "Density" },
-             { "pitch", "Pitch" }, { "detune", "Detune" }, { "octaves", "Octaves" }, { "reverse", "Reverse" },
-             { "spread", "Spread" }, { "scan", "Scan" }, { "attack", "Attack" }, { "release", "Release" },
+             { "voices", "Voices" }, { "voiceSpread", "Spread" },
+             { "gfxFilter", "Filter" }, { "gfxFilterFreq", "Cutoff" }, { "gfxFilterRes", "Reso" },
+             { "gfxCrush", "Crush" }, { "gfxCrushAmt", "Amount" },
+             { "gfxDrive", "Drive" }, { "gfxDriveAmt", "Amount" },
              { "genProb", "Chance" }, { "genOctave", "Octave" }, { "genRange", "Range" }, { "genLength", "Length" },
              { "drive", "Drive" }, { "wow", "Wow" }, { "tone", "Tone" },
              { "delayTime", "Time" }, { "delayFeedback", "Feedback" }, { "delayMix", "Mix" },
              { "reverbSize", "Size" }, { "reverbDamp", "Damp" }, { "shimmer", "Shimmer" }, { "reverbMix", "Mix" },
-             { "dry", "Dry In" }, { "volume", "Volume" },
-             { "voices", "Voices" }, { "voiceSpread", "Spread" },
-             { "gfxFilter", "Filter" }, { "gfxFilterFreq", "Cutoff" }, { "gfxFilterRes", "Reso" },
-             { "gfxCrush", "Crush" }, { "gfxCrushAmt", "Amount" },
-             { "gfxDrive", "Drive" }, { "gfxDriveAmt", "Amount" } })
+             { "dry", "Dry In" }, { "volume", "Volume" } })
         addKnob (id, title);
 
+    addChoice ("voiceMode", "Intervals");
     addChoice ("genRate", "Rate");
     addChoice ("genRoot", "Root");
     addChoice ("genScale", "Scale");
-    addChoice ("voiceMode", "Intervals");
-    addChoice ("sourceMode", "Grains pick");
-    choices[sourceModeChoice]->label.setJustificationType (juce::Justification::centredRight);
-
-    knobs[voicesKnob]->slider.setTooltip ("Quanti grani nascono insieme per ogni nota (multigrain)");
-    knobs[voiceSpreadKnob]->slider.setTooltip ("Distanza tra i punti di lettura delle voci, attorno a Position");
-    choices[voiceModeChoice]->box.setTooltip ("Intervalli tra le voci: Unison (appena stonate), Octaves, Fifths, "
-                                              "Chord (terze sulla scala di Drift)");
-    choices[sourceModeChoice]->box.setTooltip ("Da quale slot legge ogni grano: Random a caso, Cycle a rotazione, "
-                                               "Per Voice una sorgente fissa per ogni voce");
-
-    for (int i : { 0, 3, 5 })
-        knobs[firstGrainFxKnob + i]->slider.setTooltip ("Quanti grani ricevono l'effetto: 0 nessuno, 1 tutti. "
-                                                        "Ogni grano puo' averne piu' di uno");
 
     addAndMakeVisible (driftButton);
     driftAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "genOn", driftButton);
 
-    knobs[dryKnob]->slider.setVisible (BrinaProcessor::hasAudioInput());
-    knobs[dryKnob]->label.setVisible (BrinaProcessor::hasAudioInput());
+    knob ("voices").slider.setTooltip ("Quanti grani nascono insieme per ogni nota, in ogni corsia (multigrain)");
+    knob ("voiceSpread").slider.setTooltip ("Distanza tra i punti di lettura delle voci, attorno a Position");
+    choice ("voiceMode").box.setTooltip ("Intervalli tra le voci: Unison (appena stonate), Octaves, Fifths, "
+                                         "Chord (terze sulla scala di Drift)");
 
-    setSize (880, 752);
+    for (auto* id : { "gfxFilter", "gfxCrush", "gfxDrive" })
+        knob (id).slider.setTooltip ("Quanti grani ricevono l'effetto, in tutte le corsie: 0 nessuno, 1 tutti. "
+                                     "Ogni grano puo' averne piu' di uno");
+
+    knob ("dry").slider.setVisible (BrinaProcessor::hasAudioInput());
+    knob ("dry").label.setVisible (BrinaProcessor::hasAudioInput());
+
+    setResizable (true, true);
+    setResizeLimits (1060, 660, 1900, 1300);
+    setSize (defaultWidth, defaultHeight);
     startTimerHz (30);
 }
 
@@ -335,19 +337,22 @@ BrinaEditor::~BrinaEditor()
     setLookAndFeel (nullptr);
 }
 
-BrinaEditor::Knob& BrinaEditor::addKnob (const char* paramId, const char* title)
+BrinaEditor::Knob& BrinaEditor::addKnob (const juce::String& paramId, const juce::String& title, juce::Colour colour)
 {
     auto* k = knobs.add (new Knob());
     k->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     k->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     k->slider.setColour (juce::Slider::textBoxTextColourId, ui::text);
+    k->slider.setColour (juce::Slider::rotarySliderFillColourId, colour);
     k->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 16);
     k->label.setText (title, juce::dontSendNotification);
     k->label.setJustificationType (juce::Justification::centred);
     k->label.setFont (juce::FontOptions (12.0f));
+    k->label.setMinimumHorizontalScale (0.7f);
     addAndMakeVisible (k->slider);
     addAndMakeVisible (k->label);
     k->attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, paramId, k->slider);
+    knobById[paramId] = k;
     return *k;
 }
 
@@ -364,6 +369,7 @@ BrinaEditor::Choice& BrinaEditor::addChoice (const char* paramId, const char* ti
     addAndMakeVisible (c->box);
     addAndMakeVisible (c->label);
     c->attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, paramId, c->box);
+    choiceById[paramId] = c;
     return *c;
 }
 
@@ -380,236 +386,306 @@ void BrinaEditor::paint (juce::Graphics& g)
     g.drawText (BrinaProcessor::hasAudioInput() ? "granular fx" : "granular instrument",
                 96, 12, 160, 26, juce::Justification::centredLeft);
 
+    for (int i = 0; i < lanes.size(); ++i)
+    {
+        const auto& lane = *lanes[i];
+        const auto colour = ui::laneColour (i);
+        const auto b = lane.bounds.toFloat();
+
+        g.setColour (ui::panel);
+        g.fillRoundedRectangle (b, 6.0f);
+        g.setColour (colour.withAlpha (lane.wasFull ? 0.9f : 0.35f));
+        g.fillRoundedRectangle (b.withWidth (4.0f), 2.0f);
+
+        g.setColour (colour);
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        g.drawText (juce::String (i + 1), lane.badge, juce::Justification::centredLeft);
+    }
+
     for (auto& s : sections)
     {
         g.setColour (ui::panel);
         g.fillRoundedRectangle (s.bounds.toFloat(), 6.0f);
         g.setColour (ui::accent);
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (s.title, s.bounds.getX() + 10, s.bounds.getY() + 5, 300, 14, juce::Justification::centredLeft);
+        g.drawText (s.title, s.bounds.getX() + 10, s.bounds.getY() + 5, s.bounds.getWidth() - 20, 14,
+                    juce::Justification::centredLeft);
     }
-
-    g.setColour (ui::accent);
-    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawText ("SOURCE", sourceRow.getX() + 10, sourceRow.getY(), 60, sourceRow.getHeight(), juce::Justification::centredLeft);
 
     g.setColour (ui::outline);
     for (auto& d : dividers)
         g.fillRect (d);
 }
 
+void BrinaEditor::placeKnob (Knob& k, juce::Rectangle<int> cell)
+{
+    k.label.setBounds (cell.removeFromTop (14));
+    k.slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, juce::jmax (40, cell.getWidth()), 16);
+    k.slider.setBounds (cell);
+}
+
+void BrinaEditor::placeChoice (Choice& c, juce::Rectangle<int> cell)
+{
+    c.label.setBounds (cell.removeFromTop (14));
+    c.box.setBounds (cell.withSizeKeepingCentre (cell.getWidth(), 26));
+}
+
 void BrinaEditor::resized()
 {
-    const int margin = 12, gap = 8, sectionHeight = 118;
+    const int margin = 12, gap = 8, laneGap = 6, rowHeight = 108;
     auto area = getLocalBounds().reduced (margin, 0);
+    sections.clear();
+    dividers.clear();
 
+    // --- intestazione
     auto header = area.removeFromTop (46).reduced (0, 9);
-    if (recButton.isVisible())
-    {
-        recButton.setBounds (header.removeFromRight (64));
-        header.removeFromRight (gap);
-    }
-    loadButton.setBounds (header.removeFromRight (64));
-    header.removeFromRight (gap);
     header.removeFromLeft (214);    // titolo
     playButton.setBounds (header.removeFromLeft (72));
     header.removeFromLeft (gap);
     killButton.setBounds (header.removeFromLeft (52));
     header.removeFromLeft (gap);
-    sampleLabel.setBounds (header);
+    positionButton.setBounds (header.removeFromLeft (124));
+    header.removeFromLeft (gap);
+    statusLabel.setBounds (header);
 
-    // --- sorgenti: slot 1-4, Clear, e come i grani scelgono lo slot
-    sourceRow = area.removeFromTop (24);
-    area.removeFromTop (6);
-    {
-        auto row = sourceRow.withTrimmedLeft (70);
-        for (auto& b : slotButtons)
-            b.setBounds (row.removeFromLeft (38));
-        row.removeFromLeft (gap);
-        clearButton.setBounds (row.removeFromLeft (56));
-
-        auto& pick = *choices[sourceModeChoice];
-        pick.box.setBounds (row.removeFromRight (118));
-        row.removeFromRight (6);
-        pick.label.setBounds (row.removeFromRight (90));
-    }
-
-    waveform.setBounds (area.removeFromTop (150));
-    area.removeFromTop (gap);
-
-    sections.clear();
-    dividers.clear();
-
-    auto placeKnob = [this] (int index, juce::Rectangle<int> cell)
-    {
-        auto& k = *knobs[index];
-        k.label.setBounds (cell.removeFromTop (14));
-        k.slider.setBounds (cell.reduced (2, 0));
-    };
+    area.removeFromBottom (margin);
+    auto bottomRow = area.removeFromBottom (rowHeight);
+    area.removeFromBottom (gap);
+    auto middleRow = area.removeFromBottom (rowHeight);
+    area.removeFromBottom (gap);
 
     auto content = [] (juce::Rectangle<int> section) { return section.withTrimmedTop (22).reduced (6, 4); };
 
-    // --- Grains
-    auto grains = area.removeFromTop (sectionHeight);
-    area.removeFromTop (gap);
-    sections.push_back ({ "GRAINS", grains });
-    positionButton.setBounds (grains.getX() + 70, grains.getY() + 3, 112, 18);
+    // --- le corsie: a sinistra il campione, a destra i dodici controlli dei grani e il volume
+    const int laneHeight = (area.getHeight() - laneGap * (lanes.size() - 1)) / lanes.size();
+
+    for (auto* lane : lanes)
     {
-        auto row = content (grains);
-        const int cell = row.getWidth() / 12;
-        for (int i = 0; i < 12; ++i)
-            placeKnob (i, row.removeFromLeft (cell));
+        lane->bounds = area.removeFromTop (laneHeight);
+        area.removeFromTop (laneGap);
+
+        auto inner = lane->bounds.reduced (8, 5).withTrimmedLeft (6);
+        auto left = inner.removeFromLeft (juce::roundToInt ((float) inner.getWidth() * 0.3f));
+        inner.removeFromLeft (gap + 4);
+
+        auto top = left.removeFromTop (20);
+        left.removeFromTop (4);
+        lane->badge = top.removeFromLeft (16);
+
+        for (auto* b : { &lane->clear, &lane->rec, &lane->load })
+        {
+            if (! b->isVisible())
+                continue;
+            b->setBounds (top.removeFromRight (b == &lane->clear ? 48 : 44));
+            top.removeFromRight (4);
+        }
+
+        lane->name.setBounds (top);
+        lane->wave.setBounds (left);
+
+        const int count = (int) lane->knobs.size();
+        const int cell = inner.getWidth() / count;
+
+        for (int k = 0; k < count; ++k)
+        {
+            if (k == count - 1)     // un filo prima del volume della corsia
+                dividers.push_back ({ inner.getX() - 1, inner.getY() + 8, 1, inner.getHeight() - 16 });
+
+            placeKnob (*lane->knobs[(size_t) k], inner.removeFromLeft (cell));
+        }
     }
 
-    auto placeChoice = [this] (int index, juce::Rectangle<int> cell)
+    // --- Voices + Grain FX + Out, comuni a tutte le corsie
     {
-        auto& c = *choices[index];
-        c.label.setBounds (cell.removeFromTop (14));
-        c.box.setBounds (cell.withSizeKeepingCentre (cell.getWidth(), 26));
-    };
+        auto row = middleRow;
+        const float unit = (float) (row.getWidth() - 2 * gap) / 13.0f;
 
-    // --- Voices (multigrain) e Grain FX (effetti per grano)
-    {
-        auto row = area.removeFromTop (sectionHeight);
-        area.removeFromTop (gap);
-
-        auto voices = row.removeFromLeft (286);
+        auto voices = row.removeFromLeft (juce::roundToInt (unit * 4.0f));
         row.removeFromLeft (gap);
         sections.push_back ({ "VOICES  -  multigrain", voices });
         {
             auto inner = content (voices);
-            placeKnob (voicesKnob, inner.removeFromLeft (72));
-            placeKnob (voiceSpreadKnob, inner.removeFromLeft (72));
-            placeChoice (voiceModeChoice, inner.reduced (8, 0));
+            const int cell = inner.getWidth() / 4;
+            placeKnob (knob ("voices"), inner.removeFromLeft (cell));
+            placeKnob (knob ("voiceSpread"), inner.removeFromLeft (cell));
+            placeChoice (choice ("voiceMode"), inner.reduced (8, 0));
+        }
+
+        auto out = row.removeFromRight (juce::roundToInt (unit * 2.0f));
+        row.removeFromRight (gap);
+        sections.push_back ({ "OUT", out });
+        {
+            auto inner = content (out);
+            const int cell = inner.getWidth() / 2;
+            placeKnob (knob ("dry"), inner.removeFromLeft (cell));
+            placeKnob (knob ("volume"), inner);
         }
 
         sections.push_back ({ "GRAIN FX  -  how many grains get each effect", row });
         {
             auto inner = content (row);
-            const int cell = inner.getWidth() / numGrainFxKnobs;
+            const char* ids[] { "gfxFilter", "gfxFilterFreq", "gfxFilterRes", "gfxCrush", "gfxCrushAmt", "gfxDrive", "gfxDriveAmt" };
+            const int cell = inner.getWidth() / (int) std::size (ids);
 
-            for (int i = 0; i < numGrainFxKnobs; ++i)
+            for (int i = 0; i < (int) std::size (ids); ++i)
             {
                 if (i == 3 || i == 5)   // un filo tra filtro, crush e drive
                     dividers.push_back ({ inner.getX(), inner.getY() + 6, 1, inner.getHeight() - 12 });
 
-                placeKnob (firstGrainFxKnob + i, inner.removeFromLeft (cell));
+                placeKnob (knob (ids[i]), inner.removeFromLeft (cell));
             }
         }
     }
 
-    // --- Drift (generatore di note)
-    auto drift = area.removeFromTop (sectionHeight);
-    area.removeFromTop (gap);
-    sections.push_back ({ "DRIFT  -  generative notes", drift });
+    // --- Drift + Tape + Delay + Reverb
     {
-        auto row = content (drift);
-        driftButton.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (60, 24));
+        auto row = bottomRow;
+        const float unit = (float) (row.getWidth() - 3 * gap) / 20.0f;
+        auto take = [&] (float units)
+        {
+            auto r = row.removeFromLeft (juce::roundToInt (unit * units));
+            row.removeFromLeft (gap);
+            return r;
+        };
 
-        for (int i = 0; i < numDriftChoices; ++i)
-            placeChoice (i, row.removeFromLeft (130).reduced (8, 0));
+        auto drift = take (10.0f);
+        sections.push_back ({ "DRIFT  -  generative notes", drift });
+        {
+            auto inner = content (drift);
+            driftButton.setBounds (inner.removeFromLeft (juce::roundToInt (unit)).withSizeKeepingCentre (56, 24));
 
-        const int cell = row.getWidth() / 4;
-        for (int i = firstDriftKnob; i < firstFxKnob; ++i)
-            placeKnob (i, row.removeFromLeft (cell).withSizeKeepingCentre (76, row.getHeight()));
+            // Scale ha i nomi piu' lunghi ("Penta Maj", "Whole Tone"): le do piu' spazio
+            for (auto [id, units] : std::initializer_list<std::pair<const char*, float>> {
+                     { "genRate", 1.3f }, { "genRoot", 1.0f }, { "genScale", 2.5f } })
+                placeChoice (choice (id), inner.removeFromLeft (juce::roundToInt (unit * units)).reduced (4, 0));
+
+            const int cell = inner.getWidth() / 4;
+            for (auto* id : { "genProb", "genOctave", "genRange", "genLength" })
+                placeKnob (knob (id), inner.removeFromLeft (cell));
+        }
+
+        for (auto [title, ids] : std::initializer_list<std::pair<const char*, std::vector<const char*>>> {
+                 { "TAPE",   { "drive", "wow", "tone" } },
+                 { "DELAY",  { "delayTime", "delayFeedback", "delayMix" } },
+                 { "REVERB", { "reverbSize", "reverbDamp", "shimmer", "reverbMix" } } })
+        {
+            auto section = std::strcmp (title, "REVERB") == 0 ? row : take ((float) ids.size());
+            sections.push_back ({ title, section });
+
+            auto inner = content (section);
+            const int cell = inner.getWidth() / (int) ids.size();
+            for (auto* id : ids)
+                placeKnob (knob (id), inner.removeFromLeft (cell));
+        }
     }
 
-    // --- Tape / Delay / Reverb / Out
-    auto fx = area.removeFromTop (sectionHeight);
-    const int unit = (fx.getWidth() - 3 * gap) / 12;
-    int knob = firstFxKnob;
-
-    for (auto [title, count] : std::initializer_list<std::pair<const char*, int>> {
-             { "TAPE", 3 }, { "DELAY", 3 }, { "REVERB", 4 }, { "OUT", 2 } })
-    {
-        auto section = fx.removeFromLeft (unit * count);
-        fx.removeFromLeft (gap);
-        sections.push_back ({ title, section });
-
-        auto row = content (section);
-        const int cell = row.getWidth() / count;
-        for (int i = 0; i < count; ++i)
-            placeKnob (knob++, row.removeFromLeft (cell));
-    }
+    repaint();
 }
 
 //==============================================================================
 void BrinaEditor::timerCallback()
 {
-    waveform.refresh();
-
     const bool rec = proc.isRecording();
-    recButton.setToggleState (rec, juce::dontSendNotification);
-    recButton.setButtonText (rec ? "Stop" : "Rec");
-
-    playButton.setButtonText (playButton.getToggleState() ? "Playing" : "Stopped");
-
     const bool fixed = positionButton.getToggleState();
-    positionButton.setButtonText (fixed ? "Position: Fixed" : "Position: Auto");
-    knobs[scanKnob]->slider.setEnabled (! fixed);   // Scan non ha effetto a posizione fissa
+    bool repaintLanes = false;
 
-    // --- slot: selezionato, pieno o vuoto, in registrazione
-    const int slot = selectedSlot();
-    int filled = 0;
-
-    for (int i = 0; i < BrinaProcessor::numSlots; ++i)
+    for (int i = 0; i < lanes.size(); ++i)
     {
-        auto s = proc.getSample (i);
-        const bool full = s != nullptr && s->length.load() > 0;
-        const bool recHere = rec && proc.getRecordingSlot() == i;
-        filled += full ? 1 : 0;
+        auto& lane = *lanes[i];
+        lane.wave.refresh();
 
-        auto& b = slotButtons[(size_t) i];
-        b.setToggleState (i == slot, juce::dontSendNotification);
-        b.setColour (juce::TextButton::textColourOffId, recHere ? juce::Colour (0xffe0655c) : (full ? ui::text : ui::dim.withAlpha (0.6f)));
-        b.setColour (juce::TextButton::buttonOnColourId, recHere ? juce::Colour (0xffc8443c) : ui::accent);
+        auto s = proc.getSample (i);
+        const int length = s != nullptr ? s->length.load() : 0;
+        const bool full = length > 0;
+        const bool recHere = rec && proc.getRecordingSlot() == i;
+
+        const juce::String name = full ? s->name + "   " + juce::String ((double) length / s->sampleRate, 1) + " s"
+                                       : juce::String ("vuota");
+        if (name != lane.name.getText())
+            lane.name.setText (name, juce::dontSendNotification);
+        lane.name.setColour (juce::Label::textColourId, full ? ui::text : ui::dim);
+
+        lane.rec.setToggleState (recHere, juce::dontSendNotification);
+        lane.rec.setButtonText (recHere ? "Stop" : "Rec");
+        lane.clear.setEnabled (s != nullptr);
+
+        // una corsia vuota resta regolabile, ma si vede che non suona
+        if (full != lane.wasFull)
+        {
+            lane.wasFull = full;
+            repaintLanes = true;
+            for (auto* k : lane.knobs)
+            {
+                k->slider.setAlpha (full ? 1.0f : 0.45f);
+                k->label.setAlpha (full ? 1.0f : 0.6f);
+            }
+        }
+
+        lane.knobs[9]->slider.setEnabled (! fixed);     // Scan non ha effetto a posizione fissa
     }
 
-    clearButton.setEnabled (proc.getSample (slot) != nullptr);
-    choices[sourceModeChoice]->box.setEnabled (filled > 1);     // con una sola sorgente non c'e' scelta
+    if (repaintLanes)
+        repaint();
+
+    playButton.setButtonText (playButton.getToggleState() ? "Playing" : "Stopped");
+    positionButton.setButtonText (fixed ? "Position: Fixed" : "Position: Auto");
 
     // --- i controlli che al momento non hanno effetto si spengono
     auto value = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
     const bool multi = juce::roundToInt (value ("voices")) > 1;
-    knobs[voiceSpreadKnob]->slider.setEnabled (multi);
-    choices[voiceModeChoice]->box.setEnabled (multi);
+    knob ("voiceSpread").slider.setEnabled (multi);
+    choice ("voiceMode").box.setEnabled (multi);
+    knob ("gfxFilterFreq").slider.setEnabled (value ("gfxFilter") > 0.0f);
+    knob ("gfxFilterRes").slider.setEnabled (value ("gfxFilter") > 0.0f);
+    knob ("gfxCrushAmt").slider.setEnabled (value ("gfxCrush") > 0.0f);
+    knob ("gfxDriveAmt").slider.setEnabled (value ("gfxDrive") > 0.0f);
 
-    const bool filterOn = value ("gfxFilter") > 0.0f, crushOn = value ("gfxCrush") > 0.0f, driveOn = value ("gfxDrive") > 0.0f;
-    knobs[firstGrainFxKnob + 1]->slider.setEnabled (filterOn);
-    knobs[firstGrainFxKnob + 2]->slider.setEnabled (filterOn);
-    knobs[firstGrainFxKnob + 4]->slider.setEnabled (crushOn);
-    knobs[firstGrainFxKnob + 6]->slider.setEnabled (driveOn);
+    if (status.isNotEmpty() && juce::Time::getMillisecondCounter() - statusTime > 6000)
+        status = {};
 
-    juce::String text = status;
-
-    if (text.isEmpty())
-        if (auto s = proc.getSample (slot))
-            if (s->length.load() > 0)
-                text = s->name + "   " + juce::String ((double) s->length.load() / s->sampleRate, 1) + " s";
-
-    if (text != sampleLabel.getText())
-        sampleLabel.setText (text, juce::dontSendNotification);
+    if (status != statusLabel.getText())
+        statusLabel.setText (status, juce::dontSendNotification);
 }
 
-void BrinaEditor::selectSlot (int slot)
+void BrinaEditor::setStatus (const juce::String& text)
 {
-    status = {};
-    proc.selectedSlot.store (juce::jlimit (0, BrinaProcessor::numSlots - 1, slot));
-    waveform.refresh();
+    status = text;
+    statusTime = juce::Time::getMillisecondCounter();
 }
 
-void BrinaEditor::load (const juce::File& file, int slot)
+int BrinaEditor::laneAt (int x, int y) const
 {
-    status = proc.loadFile (file, slot);
+    for (int i = 0; i < lanes.size(); ++i)
+        if (lanes[i]->bounds.contains (x, y))
+            return i;
+
+    return -1;
 }
 
-void BrinaEditor::filesDropped (const juce::StringArray& files, int, int)
+void BrinaEditor::setDragLane (int lane)
 {
-    waveform.dragHover = false;
+    for (int i = 0; i < lanes.size(); ++i)
+        lanes[i]->wave.dragHover = i == lane;
+}
 
-    // piu' file insieme riempiono gli slot uno dopo l'altro, a partire da quello selezionato
-    const int first = selectedSlot();
+void BrinaEditor::load (const juce::File& file, int lane)
+{
+    const auto error = proc.loadFile (file, lane);
+    setStatus (error.isEmpty() ? juce::String() : "Corsia " + juce::String (lane + 1) + ": " + error);
+}
 
+void BrinaEditor::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    setDragLane (-1);
+
+    // fuori dalle corsie: la prima corsia vuota (o la prima, se sono tutte piene)
+    int first = laneAt (x, y);
+    for (int i = 0; first < 0 && i < lanes.size(); ++i)
+        if (proc.getSample (i) == nullptr)
+            first = i;
+    first = juce::jmax (0, first);
+
+    // piu' file insieme riempiono le corsie una dopo l'altra
     for (int i = 0; i < files.size() && first + i < BrinaProcessor::numSlots; ++i)
     {
         load (juce::File (files[i]), first + i);
@@ -619,15 +695,16 @@ void BrinaEditor::filesDropped (const juce::StringArray& files, int, int)
     }
 }
 
-void BrinaEditor::openChooser()
+void BrinaEditor::openChooser (int lane)
 {
-    chooser = std::make_unique<juce::FileChooser> ("Scegli un file audio", juce::File(), proc.getFormatWildcard());
+    chooser = std::make_unique<juce::FileChooser> ("Scegli un file audio per la corsia " + juce::String (lane + 1),
+                                                   juce::File(), proc.getFormatWildcard());
 
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this, slot = selectedSlot()] (const juce::FileChooser& fc)
+                          [this, lane] (const juce::FileChooser& fc)
                           {
                               const auto file = fc.getResult();
                               if (file.existsAsFile())
-                                  load (file, slot);
+                                  load (file, lane);
                           });
 }

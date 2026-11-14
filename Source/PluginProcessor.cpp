@@ -12,6 +12,18 @@ bool BrinaProcessor::hasAudioInput()
    #endif
 }
 
+const juce::StringArray& BrinaProcessor::laneParamBases()
+{
+    static const juce::StringArray bases { "position", "spray", "size", "density", "pitch", "detune", "octaves",
+                                           "reverse", "spread", "scan", "attack", "release", "level" };
+    return bases;
+}
+
+juce::String BrinaProcessor::laneParamId (const juce::String& base, int lane)
+{
+    return lane <= 0 ? base : base + juce::String (lane + 1);
+}
+
 //==============================================================================
 APVTS::ParameterLayout BrinaProcessor::createLayout()
 {
@@ -30,7 +42,7 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     // alto, cosi' negli Audio Unit finiscono in coda e l'ordine di quelli vecchi non cambia.
     int version = 1;
 
-    auto add = [&layout, &version] (const char* id, const char* name, Range range, float def, const char* unit = "")
+    auto add = [&layout, &version] (const juce::String& id, const juce::String& name, Range range, float def, const char* unit = "")
     {
         const juce::String suffix = juce::String (unit).isEmpty() ? juce::String() : " " + juce::String (unit);
         auto toText = [suffix] (float v, int)
@@ -51,18 +63,27 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
         layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { id, version }, name, lo, hi, def));
     };
 
-    add ("position", "Position", Range (0.0f, 1.0f), 0.3f);
-    add ("spray",    "Spray",    Range (0.0f, 1.0f), 0.25f);
-    add ("size",     "Size",     skewed (10.0f, 1500.0f, 200.0f), 220.0f, "ms");
-    add ("density",  "Density",  skewed (1.0f, 80.0f, 15.0f), 18.0f, "gr/s");
-    add ("pitch",    "Pitch",    Range (-24.0f, 24.0f, 0.01f), 0.0f, "st");
-    add ("detune",   "Detune",   Range (0.0f, 100.0f), 8.0f, "ct");
-    add ("octaves",  "Octaves",  Range (0.0f, 1.0f), 0.15f);
-    add ("reverse",  "Reverse",  Range (0.0f, 1.0f), 0.2f);
-    add ("spread",   "Spread",   Range (0.0f, 1.0f), 0.8f);
-    add ("scan",     "Scan",     Range (-2.0f, 2.0f, 0.001f), 0.05f, "x");
-    add ("attack",   "Attack",   skewed (5.0f, 8000.0f, 600.0f), 500.0f, "ms");
-    add ("release",  "Release",  skewed (20.0f, 15000.0f, 2000.0f), 3000.0f, "ms");
+    // I controlli dei grani, uguali per ogni corsia. Quelli della corsia 1 sono i parametri di sempre.
+    auto addLane = [&] (int lane)
+    {
+        const juce::String n = lane == 0 ? juce::String() : " " + juce::String (lane + 1);
+        auto id = [lane] (const char* base) { return laneParamId (base, lane); };
+
+        add (id ("position"), "Position" + n, Range (0.0f, 1.0f), 0.3f);
+        add (id ("spray"),    "Spray" + n,    Range (0.0f, 1.0f), 0.25f);
+        add (id ("size"),     "Size" + n,     skewed (10.0f, 1500.0f, 200.0f), 220.0f, "ms");
+        add (id ("density"),  "Density" + n,  skewed (1.0f, 80.0f, 15.0f), 18.0f, "gr/s");
+        add (id ("pitch"),    "Pitch" + n,    Range (-24.0f, 24.0f, 0.01f), 0.0f, "st");
+        add (id ("detune"),   "Detune" + n,   Range (0.0f, 100.0f), 8.0f, "ct");
+        add (id ("octaves"),  "Octaves" + n,  Range (0.0f, 1.0f), 0.15f);
+        add (id ("reverse"),  "Reverse" + n,  Range (0.0f, 1.0f), 0.2f);
+        add (id ("spread"),   "Spread" + n,   Range (0.0f, 1.0f), 0.8f);
+        add (id ("scan"),     "Scan" + n,     Range (-2.0f, 2.0f, 0.001f), 0.05f, "x");
+        add (id ("attack"),   "Attack" + n,   skewed (5.0f, 8000.0f, 600.0f), 500.0f, "ms");
+        add (id ("release"),  "Release" + n,  skewed (20.0f, 15000.0f, 2000.0f), 3000.0f, "ms");
+    };
+
+    addLane (0);
 
     layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "genOn", 1 }, "Drift On", true));
     addChoice ("genRate",  "Drift Rate",  brina::rateNames(), 3);
@@ -94,13 +115,13 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "kill", 1 }, "Kill", false));
     addChoice ("posMode", "Position Mode", juce::StringArray { "Auto", "Fixed" }, 0);
 
-    // --- Multigrain, sorgenti ed effetti per grano. Con i valori di default (una voce, nessun
-    // effetto) il suono e' quello di prima: i set salvati senza questi parametri non cambiano.
+    // --- Multigrain, effetti per grano e corsie 2-4. Con i valori di default (una voce, nessun
+    // effetto, corsie 2-4 vuote) il suono e' quello di prima: i set salvati senza questi parametri
+    // non cambiano.
     version = 2;
     addInt ("voices", "Grain Voices", 1, brina::Engine::maxGrainVoices, 1);
     add ("voiceSpread", "Voice Spread", Range (0.0f, 1.0f), 0.3f);
     addChoice ("voiceMode", "Voice Mode", brina::voiceModeNames(), 0);
-    addChoice ("sourceMode", "Source Mode", brina::sourceModeNames(), 1);
 
     add ("gfxFilter",     "Grain Filter Chance", Range (0.0f, 1.0f), 0.0f);
     add ("gfxFilterFreq", "Grain Filter Cutoff", skewed (80.0f, 12000.0f, 1200.0f), 1500.0f, "Hz");
@@ -109,6 +130,14 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     add ("gfxCrushAmt",   "Grain Crush Amount",  Range (0.0f, 1.0f), 0.5f);
     add ("gfxDrive",      "Grain Drive Chance",  Range (0.0f, 1.0f), 0.0f);
     add ("gfxDriveAmt",   "Grain Drive Amount",  Range (0.0f, 1.0f), 0.5f);
+
+    for (int lane = 0; lane < numSlots; ++lane)
+    {
+        if (lane > 0)
+            addLane (lane);
+
+        add (laneParamId ("level", lane), "Level " + juce::String (lane + 1), Range (0.0f, 1.0f), 1.0f);
+    }
 
     return layout;
 }
@@ -123,17 +152,29 @@ BrinaProcessor::BrinaProcessor()
 {
     formatManager.registerBasicFormats();
 
-    auto get = [this] (const char* id) { return apvts.getRawParameterValue (id); };
-    raw = { get ("position"), get ("spray"), get ("size"), get ("density"), get ("pitch"), get ("detune"),
-            get ("octaves"), get ("reverse"), get ("spread"), get ("scan"), get ("attack"), get ("release"),
-            get ("genOn"), get ("genRate"), get ("genProb"), get ("genRoot"), get ("genScale"),
+    auto get = [this] (const juce::String& id)
+    {
+        auto* v = apvts.getRawParameterValue (id);
+        jassert (v != nullptr);
+        return v;
+    };
+
+    raw = { get ("genOn"), get ("genRate"), get ("genProb"), get ("genRoot"), get ("genScale"),
             get ("genOctave"), get ("genRange"), get ("genLength"),
             get ("drive"), get ("wow"), get ("tone"), get ("delayTime"), get ("delayFeedback"), get ("delayMix"),
             get ("reverbSize"), get ("reverbDamp"), get ("shimmer"), get ("reverbMix"), get ("dry"), get ("volume"),
             get ("play"), get ("kill"), get ("posMode"),
-            get ("voices"), get ("voiceSpread"), get ("voiceMode"), get ("sourceMode"),
+            get ("voices"), get ("voiceSpread"), get ("voiceMode"),
             get ("gfxFilter"), get ("gfxFilterFreq"), get ("gfxFilterRes"),
             get ("gfxCrush"), get ("gfxCrushAmt"), get ("gfxDrive"), get ("gfxDriveAmt") };
+
+    for (int lane = 0; lane < numSlots; ++lane)
+    {
+        auto lget = [&] (const char* base) { return get (laneParamId (base, lane)); };
+        laneRaw[(size_t) lane] = { lget ("position"), lget ("spray"), lget ("size"), lget ("density"), lget ("pitch"),
+                                   lget ("detune"), lget ("octaves"), lget ("reverse"), lget ("spread"), lget ("scan"),
+                                   lget ("attack"), lget ("release"), lget ("level") };
+    }
 }
 
 bool BrinaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -161,10 +202,17 @@ void BrinaProcessor::readParams (brina::Params& p) const
     auto f = [] (const std::atomic<float>* a) { return a->load (std::memory_order_relaxed); };
     auto i = [] (const std::atomic<float>* a) { return juce::roundToInt (a->load (std::memory_order_relaxed)); };
 
-    p.position = f (raw.position);   p.spray = f (raw.spray);       p.sizeMs = f (raw.size);
-    p.density = f (raw.density);     p.pitch = f (raw.pitch);       p.detuneCents = f (raw.detune);
-    p.octaves = f (raw.octaves);     p.reverse = f (raw.reverse);   p.spread = f (raw.spread);
-    p.scan = f (raw.scan);           p.attackMs = f (raw.attack);   p.releaseMs = f (raw.release);
+    for (int lane = 0; lane < numSlots; ++lane)
+    {
+        const auto& r = laneRaw[(size_t) lane];
+        auto& g = p.lane (lane);
+        g.position = f (r.position);   g.spray = f (r.spray);       g.sizeMs = f (r.size);
+        g.density = f (r.density);     g.pitch = f (r.pitch);       g.detuneCents = f (r.detune);
+        g.octaves = f (r.octaves);     g.reverse = f (r.reverse);   g.spread = f (r.spread);
+        g.scan = f (r.scan);           g.attackMs = f (r.attack);   g.releaseMs = f (r.release);
+        g.level = f (r.level);
+    }
+
     p.genOn = f (raw.genOn) > 0.5f;  p.genRate = i (raw.genRate);   p.genProb = f (raw.genProb);
     p.genRoot = i (raw.genRoot);     p.genScale = i (raw.genScale); p.genOctave = i (raw.genOctave);
     p.genRange = i (raw.genRange);   p.genLength = f (raw.genLength);
@@ -177,7 +225,7 @@ void BrinaProcessor::readParams (brina::Params& p) const
     p.running = f (raw.play) > 0.5f;
     p.fixedPosition = i (raw.posMode) == 1;
     p.grainVoices = i (raw.voices);  p.voiceSpread = f (raw.voiceSpread);
-    p.voiceMode = i (raw.voiceMode); p.sourceMode = i (raw.sourceMode);
+    p.voiceMode = i (raw.voiceMode);
     p.gfxFilterChance = f (raw.gfxFilter); p.gfxFilterHz = f (raw.gfxFilterFreq); p.gfxFilterRes = f (raw.gfxFilterRes);
     p.gfxCrushChance = f (raw.gfxCrush);   p.gfxCrush = f (raw.gfxCrushAmt);
     p.gfxDriveChance = f (raw.gfxDrive);   p.gfxDrive = f (raw.gfxDriveAmt);
@@ -443,7 +491,6 @@ void BrinaProcessor::getStateInformation (juce::MemoryBlock& dest)
     for (int slot = 0; slot < numSlots; ++slot)
         saveSlot (*xml, slot);
 
-    xml->setAttribute ("uiSlot", selectedSlot.load());
     copyXmlToBinary (*xml, dest);
 }
 
@@ -502,8 +549,7 @@ void BrinaProcessor::setStateInformation (const void* data, int size)
         xml->removeAttribute (slotAttribute ("recording", slot));
     }
 
-    selectedSlot.store (juce::jlimit (0, numSlots - 1, xml->getIntAttribute ("uiSlot", 0)));
-    xml->removeAttribute ("uiSlot");
+    xml->removeAttribute ("uiSlot");     // scritto da una versione di prova, non serve piu'
 
     juce::StringArray saved;
     for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))

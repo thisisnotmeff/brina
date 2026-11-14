@@ -81,9 +81,26 @@ static void checkOldParameters (BrinaProcessor& p, bool fx)
         tail = tail && params[i]->getVersionHint() > 1;
 
     auto raw = [&p] (const char* id) { auto* v = p.apvts.getRawParameterValue (id); return v != nullptr ? v->load() : -1.0f; };
-    check (tail && params.size() == (int) std::size (old) + 11
-               && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f,
-           "parametri nuovi in coda; default: una voce, nessun effetto per grano");
+    // 10 per voci ed effetti per grano, 12 controlli per ognuna delle corsie 2-4, un Level per corsia
+    check (tail && params.size() == (int) std::size (old) + 10 + 3 * 12 + 4
+               && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
+               && raw ("level") == 1.0f && raw ("level4") == 1.0f,
+           "parametri nuovi in coda; default: una voce, nessun effetto, Level al massimo");
+
+    // le corsie 2-4 hanno gli stessi controlli della corsia 1: stessi intervalli e stessi default
+    bool same = true;
+    for (int lane = 1; lane < BrinaProcessor::numSlots; ++lane)
+        for (auto& base : BrinaProcessor::laneParamBases())
+        {
+            auto* a = p.apvts.getParameter (BrinaProcessor::laneParamId (base, 0));
+            auto* b = p.apvts.getParameter (BrinaProcessor::laneParamId (base, lane));
+            same = same && a != nullptr && b != nullptr
+                   && a->getNormalisableRange().start == b->getNormalisableRange().start
+                   && a->getNormalisableRange().end == b->getNormalisableRange().end
+                   && a->getDefaultValue() == b->getDefaultValue()
+                   && b->getName (64).endsWith (juce::String (lane + 1));
+        }
+    check (same, "corsie 2-4: stessi controlli della corsia 1 (position2 ... release4)");
 }
 
 int main (int argc, char** argv)
@@ -166,29 +183,30 @@ int main (int argc, char** argv)
         setParam ("play", 1.0f);
         check (render (p, 5.0, false) > 0.003, "Play: riparte");
 
-        check (std::abs (p.engine.scanVis.load()) > 1e-4f, "posizione automatica: scorre");
+        check (std::abs (p.engine.scanVis[0].load()) > 1e-4f, "posizione automatica: scorre");
         setParam ("posMode", 1.0f);
         render (p, 1.0, false);
-        check (p.engine.scanVis.load() == 0.0f, "posizione fissa: ferma su Position");
+        check (p.engine.scanVis[0].load() == 0.0f, "posizione fissa: ferma su Position");
         setParam ("posMode", 0.0f);
         setParam ("genOn", 0.0f);
         render (p, 30.0, false);
 
-        // --- quattro slot, multigrain, effetti per grano
-        check (slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0, "all'inizio gli slot 2-4 sono vuoti");
+        // --- quattro corsie, multigrain, effetti per grano
+        check (slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0, "all'inizio le corsie 2-4 sono vuote");
         check (p.loadFile (wav2, 2).isEmpty() && slotLength (p, 2) == 30000 && slotLength (p, 0) == 96000,
-               "caricamento nello slot 3, lo slot 1 non cambia");
-        check (p.loadFile (wav, 7).isNotEmpty(), "slot inesistente: errore gestito");
-        check (p.loadFile (wav2, 3).isEmpty(), "caricamento nello slot 4");
+               "caricamento nella corsia 3, la corsia 1 non cambia");
+        check (p.loadFile (wav, 7).isNotEmpty(), "corsia inesistente: errore gestito");
+        check (p.loadFile (wav2, 3).isEmpty(), "caricamento nella corsia 4");
         p.clearSlot (3);
-        check (slotLength (p, 3) == 0 && slotLength (p, 2) == 30000, "Clear svuota solo lo slot scelto");
+        check (slotLength (p, 3) == 0 && slotLength (p, 2) == 30000, "Clear svuota solo la corsia scelta");
+        setParam ("pitch3", 0.75f);          // corsia 3 un'ottava sopra
+        setParam ("density3", 0.8f);
 
         setParam ("voices", 1.0f);          // 8 voci
         setParam ("voiceMode", 1.0f);       // Chord
-        setParam ("sourceMode", 0.0f);      // Random
         setParam ("gfxFilter", 0.5f); setParam ("gfxCrush", 0.5f); setParam ("gfxDrive", 0.5f);
         check (p.apvts.getRawParameterValue ("voices")->load() == 8.0f, "Grain Voices arriva a 8");
-        check (render (p, 3.0, false, true) > 0.003, "8 voci, 2 slot ed effetti per grano: suona");
+        check (render (p, 3.0, false, true) > 0.003, "8 voci, 2 corsie ed effetti per grano: suona");
 
         bool sawFirst = false, sawThird = false, sawOther = false;
         for (int i = 0; i < 40; ++i)
@@ -202,7 +220,7 @@ int main (int argc, char** argv)
                 sawOther = sawOther || slot == 1 || slot == 3;
             }
         }
-        check (sawFirst && sawThird && ! sawOther, "i grani leggono dagli slot 1 e 3, non da quelli vuoti");
+        check (sawFirst && sawThird && ! sawOther, "i grani leggono dalle corsie 1 e 3, non da quelle vuote");
 
         p.triggerKill(); render (p, 0.05, false);   // via la nota tenuta
         p.triggerKill(); render (p, 0.05, false);   // e il parametro Kill torna a 0
@@ -210,13 +228,13 @@ int main (int argc, char** argv)
 
         if (fx)
         {
-            // registrare nello slot 2 non tocca gli altri
+            // registrare nella corsia 2 non tocca le altre
             p.startRecording (1);
             render (p, 1.0, true);
             p.stopRecording();
             check (std::abs (slotLength (p, 1) - 48000) <= 512 && slotLength (p, 0) == 96000 && slotLength (p, 2) == 30000
                        && p.getRecordingSlot() == 1,
-                   "registrazione nello slot 2, gli altri non cambiano");
+                   "registrazione nella corsia 2, le altre non cambiano");
 
             p.startRecording();
             render (p, 3.0, true);
@@ -230,7 +248,6 @@ int main (int argc, char** argv)
             p.startRecording(); render (p, 2.0, true); p.stopRecording();
         }
 
-        p.selectedSlot.store (2);
         p.apvts.getParameter ("pitch")->setValueNotifyingHost (0.75f);
         p.getStateInformation (state);
         std::printf ("      stato salvato: %d KB\n", (int) (state.getSize() / 1024));
@@ -246,10 +263,13 @@ int main (int argc, char** argv)
                "campione ripristinato dallo stato");
         check (slotLength (p, 2) == 30000 && slotLength (p, 3) == 0
                    && (fx ? std::abs (slotLength (p, 1) - 48000) <= 512 : slotLength (p, 1) == 0),
-               "slot 2-4 ripristinati dallo stato (file e registrazione)");
-        check (p.apvts.getRawParameterValue ("voices")->load() == 8.0f && p.apvts.getRawParameterValue ("sourceMode")->load() == 0.0f
-                   && std::abs (p.apvts.getRawParameterValue ("gfxCrush")->load() - 0.5f) < 1e-4f && p.selectedSlot.load() == 2,
-               "voci, sorgente, effetti per grano e slot selezionato ripristinati");
+               "corsie 2-4 ripristinate dallo stato (file e registrazione)");
+        check (p.apvts.getRawParameterValue ("voices")->load() == 8.0f
+                   && std::abs (p.apvts.getRawParameterValue ("gfxCrush")->load() - 0.5f) < 1e-4f
+                   && std::abs (p.apvts.getRawParameterValue ("pitch3")->load() - 12.0f) < 0.01f
+                   && std::abs (p.apvts.getRawParameterValue ("pitch")->load() - 12.0f) < 0.01f
+                   && std::abs (p.apvts.getRawParameterValue ("pitch2")->load()) < 0.01f,
+               "voci, effetti per grano e controlli di ogni corsia ripristinati");
 
         // ripristinare lo stesso stato due volte non lascia residui; e salvarlo di nuovo da' lo stesso risultato
         p.loadFile (wav2, 3);
@@ -261,18 +281,26 @@ int main (int argc, char** argv)
         p.apvts.getParameter ("genOn")->setValueNotifyingHost (1.0f);
         check (render (p, 5.0, false) > 0.003, "suona dopo il ripristino");
 
-        p.selectedSlot.store (0);   // per l'immagine: il primo slot, quattro voci
-        p.apvts.getParameter ("voices")->setValueNotifyingHost (3.0f / 7.0f);
+        p.apvts.getParameter ("voices")->setValueNotifyingHost (3.0f / 7.0f);   // per l'immagine: quattro voci
         render (p, 2.0, false);
 
         std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
         editor->setVisible (true);
-        for (int i = 0; i < 5; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
-        auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
-        auto png = outDir.getChildFile (fx ? "brina_fx.png" : "brina.png");
-        png.deleteFile();
-        juce::FileOutputStream out (png);
-        check (juce::PNGImageFormat().writeImageToStream (image, out), "interfaccia disegnata -> " + png.getFileName());
+
+        // l'interfaccia alla misura normale e a quella minima
+        for (auto [w, h, name] : std::initializer_list<std::tuple<int, int, const char*>> {
+                 { BrinaEditor::defaultWidth, BrinaEditor::defaultHeight, fx ? "brina_fx.png" : "brina.png" },
+                 { 1060, 660, fx ? "brina_fx_small.png" : "brina_small.png" } })
+        {
+            editor->setSize (w, h);
+            for (int i = 0; i < 5; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
+            auto png = outDir.getChildFile (name);
+            png.deleteFile();
+            juce::FileOutputStream out (png);
+            check (editor->getWidth() == w && juce::PNGImageFormat().writeImageToStream (image, out),
+                   "interfaccia disegnata -> " + png.getFileName());
+        }
     }
 
     {   // --- un set salvato con la versione precedente: solo i parametri di allora e "samplePath"
@@ -295,9 +323,11 @@ int main (int argc, char** argv)
         BrinaProcessor p;
         p.setPlayConfigDetails (fx ? 2 : 0, 2, 48000.0, 512);
         p.prepareToPlay (48000.0, 512);
-        p.loadFile (wav2, 1);       // qualcosa di gia' caricato negli altri slot deve sparire
+        p.loadFile (wav2, 1);       // qualcosa di gia' caricato nelle altre corsie deve sparire
         p.apvts.getParameter ("voices")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("gfxDrive")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("pitch4")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("level2")->setValueNotifyingHost (0.0f);
         p.setStateInformation (oldState.getData(), (int) oldState.getSize());
 
         auto raw = [&p] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
@@ -306,8 +336,8 @@ int main (int argc, char** argv)
                    && slotLength (p, 0) == 96000,
                "set della versione precedente: parametri e campione al loro posto");
         check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-                   && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
-               "set della versione precedente: una voce, nessun effetto, slot 2-4 vuoti");
+                   && raw ("pitch4") == 0.0f && raw ("level2") == 1.0f && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
+               "set della versione precedente: una voce, nessun effetto, corsie 2-4 vuote");
         p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);
         check (render (p, 5.0, false) > 0.003, "set della versione precedente: suona");
     }
