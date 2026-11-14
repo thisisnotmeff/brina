@@ -301,7 +301,8 @@ int main (int argc, char** argv)
         p.setStateInformation (oldState.getData(), (int) oldState.getSize());
 
         auto raw = [&p] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
-        check (raw ("pitch") == 7.0f && raw ("density") == 30.0f && raw ("genScale") == 4.0f && raw ("posMode") == 1.0f
+        auto near = [&raw] (const char* id, float v) { return std::abs (raw (id) - v) < 1e-3f; };   // i float passano dalla scala 0..1
+        check (near ("pitch", 7.0f) && near ("density", 30.0f) && raw ("genScale") == 4.0f && raw ("posMode") == 1.0f
                    && slotLength (p, 0) == 96000,
                "set della versione precedente: parametri e campione al loro posto");
         check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
