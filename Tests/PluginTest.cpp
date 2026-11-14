@@ -30,6 +30,62 @@ static double render (BrinaProcessor& p, double seconds, bool feedInput, bool no
     return std::sqrt (sum / (double) count);
 }
 
+// I parametri della versione precedente: ID, posizione, intervallo e default non devono cambiare mai,
+// altrimenti i set di Live salvati (e le automazioni) si rompono.
+struct OldParam { const char* id; float lo, hi, def; };
+
+static void checkOldParameters (BrinaProcessor& p, bool fx)
+{
+    const OldParam old[] = {
+        { "position", 0, 1, 0.3f }, { "spray", 0, 1, 0.25f }, { "size", 10, 1500, 220 }, { "density", 1, 80, 18 },
+        { "pitch", -24, 24, 0 }, { "detune", 0, 100, 8 }, { "octaves", 0, 1, 0.15f }, { "reverse", 0, 1, 0.2f },
+        { "spread", 0, 1, 0.8f }, { "scan", -2, 2, 0.05f }, { "attack", 5, 8000, 500 }, { "release", 20, 15000, 3000 },
+        { "genOn", 0, 1, 1 }, { "genRate", 0, 6, 3 }, { "genProb", 0, 1, 0.6f }, { "genRoot", 0, 11, 0 },
+        { "genScale", 0, 7, 2 }, { "genOctave", -3, 3, 0 }, { "genRange", 1, 4, 2 }, { "genLength", 0.25f, 8, 3 },
+        { "drive", 0, 1, 0.2f }, { "wow", 0, 1, 0.25f }, { "tone", 300, 20000, 9000 },
+        { "delayTime", 20, 2500, 380 }, { "delayFeedback", 0, 0.95f, 0.4f }, { "delayMix", 0, 1, 0.25f },
+        { "reverbSize", 0, 1, 0.85f }, { "reverbDamp", 0, 1, 0.4f }, { "shimmer", 0, 1, 0.25f }, { "reverbMix", 0, 1, 0.4f },
+        { "dry", 0, 1, fx ? 1.0f : 0.0f }, { "volume", -48, 12, 0 },
+        { "play", 0, 1, 1 }, { "kill", 0, 1, 0 }, { "posMode", 0, 1, 0 } };
+
+    const auto& params = p.getParameters();
+    bool ok = params.size() >= (int) std::size (old);
+    juce::String wrong;
+
+    for (int i = 0; ok && i < (int) std::size (old); ++i)
+    {
+        auto* param = dynamic_cast<juce::RangedAudioParameter*> (params[i]);
+        const auto& o = old[i];
+
+        if (param == nullptr || param->getParameterID() != o.id || param->getVersionHint() != 1)
+        {
+            ok = false;
+        }
+        else
+        {
+            const auto range = param->getNormalisableRange();
+            const float def = param->convertFrom0to1 (param->getDefaultValue());
+            ok = std::abs (range.start - o.lo) < 1e-4f && std::abs (range.end - o.hi) < 1e-4f
+                 && std::abs (def - o.def) < 1e-3f * juce::jmax (1.0f, std::abs (o.def));
+        }
+
+        if (! ok)
+            wrong = "  (" + juce::String (o.id) + ")";
+    }
+
+    check (ok, "i 35 parametri esistenti sono invariati: ID, ordine, intervalli, default" + wrong);
+
+    // quelli nuovi stanno in coda, con un numero di versione piu' alto, e di default non cambiano il suono
+    bool tail = true;
+    for (int i = (int) std::size (old); i < params.size(); ++i)
+        tail = tail && params[i]->getVersionHint() > 1;
+
+    auto raw = [&p] (const char* id) { auto* v = p.apvts.getRawParameterValue (id); return v != nullptr ? v->load() : -1.0f; };
+    check (tail && params.size() == (int) std::size (old) + 11
+               && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f,
+           "parametri nuovi in coda; default: una voce, nessun effetto per grano");
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -50,11 +106,35 @@ int main (int argc, char** argv)
         writer->writeFromAudioSampleBuffer (b, 0, 96000);
     }
 
+    auto wav2 = outDir.getChildFile ("brina_test_2.wav");
+    wav2.deleteFile();
+    {
+        juce::AudioBuffer<float> b (2, 30000);
+        for (int i = 0; i < 30000; ++i)
+        {
+            b.setSample (0, i, 0.4f * (float) std::sin (i * 0.11));
+            b.setSample (1, i, 0.4f * (float) std::sin (i * 0.12));
+        }
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::OutputStream> stream = wav2.createOutputStream();
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000.0).withNumChannels (2).withBitsPerSample (24));
+        writer->writeFromAudioSampleBuffer (b, 0, 30000);
+    }
+
+    auto slotLength = [] (BrinaProcessor& p, int slot)
+    {
+        auto s = p.getSample (slot);
+        return s != nullptr ? s->length.load() : 0;
+    };
+
     juce::MemoryBlock state;
     {
         BrinaProcessor p;
         p.setPlayConfigDetails (fx ? 2 : 0, 2, 48000.0, 512);
         p.prepareToPlay (48000.0, 512);
+
+        checkOldParameters (p, fx);
+        p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);   // una nota a ogni passo: i test non dipendono dal caso
 
         p.apvts.getParameter ("dry")->setValueNotifyingHost (0.0f);
         check (render (p, 2.0, true) < 1e-5, "senza campione: silenzio");
@@ -94,8 +174,50 @@ int main (int argc, char** argv)
         setParam ("genOn", 0.0f);
         render (p, 30.0, false);
 
+        // --- quattro slot, multigrain, effetti per grano
+        check (slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0, "all'inizio gli slot 2-4 sono vuoti");
+        check (p.loadFile (wav2, 2).isEmpty() && slotLength (p, 2) == 30000 && slotLength (p, 0) == 96000,
+               "caricamento nello slot 3, lo slot 1 non cambia");
+        check (p.loadFile (wav, 7).isNotEmpty(), "slot inesistente: errore gestito");
+        check (p.loadFile (wav2, 3).isEmpty(), "caricamento nello slot 4");
+        p.clearSlot (3);
+        check (slotLength (p, 3) == 0 && slotLength (p, 2) == 30000, "Clear svuota solo lo slot scelto");
+
+        setParam ("voices", 1.0f);          // 8 voci
+        setParam ("voiceMode", 1.0f);       // Chord
+        setParam ("sourceMode", 0.0f);      // Random
+        setParam ("gfxFilter", 0.5f); setParam ("gfxCrush", 0.5f); setParam ("gfxDrive", 0.5f);
+        check (p.apvts.getRawParameterValue ("voices")->load() == 8.0f, "Grain Voices arriva a 8");
+        check (render (p, 3.0, false, true) > 0.003, "8 voci, 2 slot ed effetti per grano: suona");
+
+        bool sawFirst = false, sawThird = false, sawOther = false;
+        for (int i = 0; i < 40; ++i)
+        {
+            render (p, 0.05, false);
+            for (auto& v : p.engine.grainVis)
+            {
+                const int slot = (int) std::floor (v.load());
+                sawFirst = sawFirst || slot == 0;
+                sawThird = sawThird || slot == 2;
+                sawOther = sawOther || slot == 1 || slot == 3;
+            }
+        }
+        check (sawFirst && sawThird && ! sawOther, "i grani leggono dagli slot 1 e 3, non da quelli vuoti");
+
+        p.triggerKill(); render (p, 0.05, false);   // via la nota tenuta
+        p.triggerKill(); render (p, 0.05, false);   // e il parametro Kill torna a 0
+        setParam ("gfxFilter", 0.0f); setParam ("gfxDrive", 0.0f);
+
         if (fx)
         {
+            // registrare nello slot 2 non tocca gli altri
+            p.startRecording (1);
+            render (p, 1.0, true);
+            p.stopRecording();
+            check (std::abs (slotLength (p, 1) - 48000) <= 512 && slotLength (p, 0) == 96000 && slotLength (p, 2) == 30000
+                       && p.getRecordingSlot() == 1,
+                   "registrazione nello slot 2, gli altri non cambiano");
+
             p.startRecording();
             render (p, 3.0, true);
             p.stopRecording();
@@ -108,6 +230,7 @@ int main (int argc, char** argv)
             p.startRecording(); render (p, 2.0, true); p.stopRecording();
         }
 
+        p.selectedSlot.store (2);
         p.apvts.getParameter ("pitch")->setValueNotifyingHost (0.75f);
         p.getStateInformation (state);
         std::printf ("      stato salvato: %d KB\n", (int) (state.getSize() / 1024));
@@ -121,8 +244,26 @@ int main (int argc, char** argv)
         check (std::abs (p.apvts.getRawParameterValue ("pitch")->load() - 12.0f) < 0.01f, "parametri ripristinati");
         check (s != nullptr && (fx ? std::abs (s->length.load() - 96000) <= 512 : s->length.load() == 96000),
                "campione ripristinato dallo stato");
+        check (slotLength (p, 2) == 30000 && slotLength (p, 3) == 0
+                   && (fx ? std::abs (slotLength (p, 1) - 48000) <= 512 : slotLength (p, 1) == 0),
+               "slot 2-4 ripristinati dallo stato (file e registrazione)");
+        check (p.apvts.getRawParameterValue ("voices")->load() == 8.0f && p.apvts.getRawParameterValue ("sourceMode")->load() == 0.0f
+                   && std::abs (p.apvts.getRawParameterValue ("gfxCrush")->load() - 0.5f) < 1e-4f && p.selectedSlot.load() == 2,
+               "voci, sorgente, effetti per grano e slot selezionato ripristinati");
+
+        // ripristinare lo stesso stato due volte non lascia residui; e salvarlo di nuovo da' lo stesso risultato
+        p.loadFile (wav2, 3);
+        p.setStateInformation (state.getData(), (int) state.getSize());
+        juce::MemoryBlock again;
+        p.getStateInformation (again);
+        check (slotLength (p, 3) == 0 && (fx || again.getSize() == state.getSize()),   // (le registrazioni vengono ricompresse)
+               "lo stato ripristinato e' esattamente quello salvato");
         p.apvts.getParameter ("genOn")->setValueNotifyingHost (1.0f);
         check (render (p, 5.0, false) > 0.003, "suona dopo il ripristino");
+
+        p.selectedSlot.store (0);   // per l'immagine: il primo slot, quattro voci
+        p.apvts.getParameter ("voices")->setValueNotifyingHost (3.0f / 7.0f);
+        render (p, 2.0, false);
 
         std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
         editor->setVisible (true);
@@ -133,6 +274,45 @@ int main (int argc, char** argv)
         juce::FileOutputStream out (png);
         check (juce::PNGImageFormat().writeImageToStream (image, out), "interfaccia disegnata -> " + png.getFileName());
     }
+
+    {   // --- un set salvato con la versione precedente: solo i parametri di allora e "samplePath"
+        juce::XmlElement old ("BRINA");
+        auto addParam = [&old] (const char* id, double value)
+        {
+            auto* e = old.createNewChildElement ("PARAM");
+            e->setAttribute ("id", id);
+            e->setAttribute ("value", value);
+        };
+        addParam ("pitch", 7.0);
+        addParam ("density", 30.0);
+        addParam ("genScale", 4.0);
+        addParam ("posMode", 1.0);
+        old.setAttribute ("samplePath", wav.getFullPathName());
+
+        juce::MemoryBlock oldState;
+        juce::AudioProcessor::copyXmlToBinary (old, oldState);
+
+        BrinaProcessor p;
+        p.setPlayConfigDetails (fx ? 2 : 0, 2, 48000.0, 512);
+        p.prepareToPlay (48000.0, 512);
+        p.loadFile (wav2, 1);       // qualcosa di gia' caricato negli altri slot deve sparire
+        p.apvts.getParameter ("voices")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("gfxDrive")->setValueNotifyingHost (1.0f);
+        p.setStateInformation (oldState.getData(), (int) oldState.getSize());
+
+        auto raw = [&p] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
+        check (raw ("pitch") == 7.0f && raw ("density") == 30.0f && raw ("genScale") == 4.0f && raw ("posMode") == 1.0f
+                   && slotLength (p, 0) == 96000,
+               "set della versione precedente: parametri e campione al loro posto");
+        check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
+                   && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
+               "set della versione precedente: una voce, nessun effetto, slot 2-4 vuoti");
+        p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);
+        check (render (p, 5.0, false) > 0.003, "set della versione precedente: suona");
+    }
+
+    wav.deleteFile();
+    wav2.deleteFile();
 
     std::printf (failures == 0 ? "TUTTO OK\n" : "%d FALLITI\n", failures);
     return failures;

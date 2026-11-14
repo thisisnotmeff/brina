@@ -12,6 +12,9 @@ Sono due plugin con lo stesso motore:
 | **Brina** | traccia MIDI (strumento) | file audio |
 | **Brina FX** | traccia audio (effetto) | file audio oppure **Rec** dell'ingresso della traccia (max 60 s) |
 
+Le sorgenti audio sono quattro (**slot 1-4**): ogni grano legge da uno degli slot pieni, quindi
+si possono mescolare fino a quattro suoni diversi nella stessa nuvola.
+
 ## Installazione
 
 **Senza compilare (GitHub):** carica questa cartella in un repository GitHub. La scheda *Actions*
@@ -38,6 +41,8 @@ installati; per `/Library/...` aggiungi `sudo` davanti) e riapri Live con *Resca
 
 1. Trascina un file audio sulla forma d'onda (o **Load**). In Brina FX puoi premere **Rec**
    per catturare l'audio che passa nella traccia; mentre registri i grani suonano gia'.
+   Il file va nello slot selezionato nella riga **Source** (1-4); trascinando piu' file insieme
+   si riempiono gli slot uno dopo l'altro. **Clear** svuota lo slot selezionato.
 2. Con **Drift** acceso il plugin suona da solo. Spegnilo per suonare tu via MIDI
    (Do3 = intonazione originale). Per mandare MIDI a Brina FX: crea una traccia MIDI e
    imposta *MIDI To* sulla traccia audio.
@@ -57,6 +62,22 @@ del grano · *Density* grani al secondo · *Pitch* trasposizione · *Detune* sto
 *Spread* apertura stereo · *Scan* velocita' con cui la posizione scorre da sola ·
 *Attack / Release* inviluppo delle note.
 
+**Source** - gli slot *1-4* scelgono quale sorgente vedi e carichi (quelli pieni hanno il numero
+piu' chiaro). *Grains pick* decide da quale slot legge ogni grano: *Random* a caso, *Cycle* a
+rotazione, *Per Voice* una sorgente fissa per ogni voce. *Position*, *Spray* e *Scan* valgono per
+tutti gli slot, in proporzione alla loro durata.
+
+**Voices** (multigrain) - *Voices* quanti grani nascono insieme per ogni nota, da 1 a 8: le voci
+si aprono a ventaglio attorno a *Position* e nello stereo, il volume resta lo stesso · *Spread*
+distanza tra i punti di lettura delle voci · *Intervals* intonazione delle voci: *Unison* (appena
+stonate fra loro), *Octaves*, *Fifths*, *Chord* (terze sovrapposte sulla scala di Drift).
+
+**Grain FX** - effetti applicati ai singoli grani, non al suono intero. Per ognuno il primo
+controllo dice quanti grani lo ricevono (0 = nessuno, 1 = tutti; a meta' circa un grano su due,
+scelto a caso), e un grano puo' riceverne piu' d'uno. *Filter* passa-basso, con *Cutoff* (ogni
+grano ha un taglio un po' diverso) e *Reso* · *Crush* riduzione di bit e di frequenza, con
+*Amount* · *Drive* saturazione, con *Amount*.
+
 **Drift** - generatore di note: passeggiata casuale sulla scala scelta. *Rate* passo (legato al
 tempo di Live) · *Chance* probabilita' di una nota a ogni passo · *Root / Scale* tonalita' ·
 *Octave / Range* registro ed estensione · *Length* durata delle note in passi.
@@ -65,13 +86,18 @@ tempo di Live) · *Chance* probabilita' di una nota a ogni passo · *Root / Scal
 come un nastro · **Reverb** con *Shimmer* (ottava sopra nel feedback) · **Out** *Dry In*
 (solo FX: segnale originale) e *Volume*.
 
-Il campione viene salvato col progetto di Live: i file come percorso, le registrazioni dentro
-il set (FLAC).
+I campioni dei quattro slot vengono salvati col progetto di Live: i file come percorso, le
+registrazioni dentro il set (FLAC).
+
+I set salvati con le versioni precedenti si aprono e suonano come prima: il loro campione e'
+nello slot 1, con una voce sola e nessun effetto per grano.
 
 ## Sviluppo
 
     cmake -S . -B build -DBRINA_INSTALL=OFF -DBRINA_TESTS=ON && cmake --build build
     ./build/BrinaTest_artefacts/Release/BrinaTest
+    ./build/BrinaPluginTest_artefacts/Release/BrinaPluginTest /tmp
+    ./build/BrinaFXPluginTest_artefacts/Release/BrinaFXPluginTest /tmp
 
 `Source/Engine.h` contiene tutto il DSP e non dipende dall'host. Costruito con
 [JUCE](https://juce.com) 8 (licenza AGPLv3 / commerciale: va bene per uso personale; per

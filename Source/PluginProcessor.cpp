@@ -26,25 +26,29 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
         return r;
     };
 
-    auto add = [&layout] (const char* id, const char* name, Range range, float def, const char* unit = "")
+    // Il numero di versione dei parametri: quelli aggiunti dopo la prima uscita ne prendono uno piu'
+    // alto, cosi' negli Audio Unit finiscono in coda e l'ordine di quelli vecchi non cambia.
+    int version = 1;
+
+    auto add = [&layout, &version] (const char* id, const char* name, Range range, float def, const char* unit = "")
     {
         const juce::String suffix = juce::String (unit).isEmpty() ? juce::String() : " " + juce::String (unit);
         auto toText = [suffix] (float v, int)
         {
             return (std::abs (v) >= 100.0f ? juce::String (juce::roundToInt (v)) : juce::String (v, 2)) + suffix;
         };
-        layout.add (std::make_unique<FloatParam> (juce::ParameterID { id, 1 }, name, range, def,
+        layout.add (std::make_unique<FloatParam> (juce::ParameterID { id, version }, name, range, def,
                                                   juce::AudioParameterFloatAttributes().withStringFromValueFunction (toText)));
     };
 
-    auto addChoice = [&layout] (const char* id, const char* name, const juce::StringArray& items, int def)
+    auto addChoice = [&layout, &version] (const char* id, const char* name, const juce::StringArray& items, int def)
     {
-        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id, 1 }, name, items, def));
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id, version }, name, items, def));
     };
 
-    auto addInt = [&layout] (const char* id, const char* name, int lo, int hi, int def)
+    auto addInt = [&layout, &version] (const char* id, const char* name, int lo, int hi, int def)
     {
-        layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { id, 1 }, name, lo, hi, def));
+        layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { id, version }, name, lo, hi, def));
     };
 
     add ("position", "Position", Range (0.0f, 1.0f), 0.3f);
@@ -90,6 +94,22 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "kill", 1 }, "Kill", false));
     addChoice ("posMode", "Position Mode", juce::StringArray { "Auto", "Fixed" }, 0);
 
+    // --- Multigrain, sorgenti ed effetti per grano. Con i valori di default (una voce, nessun
+    // effetto) il suono e' quello di prima: i set salvati senza questi parametri non cambiano.
+    version = 2;
+    addInt ("voices", "Grain Voices", 1, brina::Engine::maxGrainVoices, 1);
+    add ("voiceSpread", "Voice Spread", Range (0.0f, 1.0f), 0.3f);
+    addChoice ("voiceMode", "Voice Mode", brina::voiceModeNames(), 0);
+    addChoice ("sourceMode", "Source Mode", brina::sourceModeNames(), 1);
+
+    add ("gfxFilter",     "Grain Filter Chance", Range (0.0f, 1.0f), 0.0f);
+    add ("gfxFilterFreq", "Grain Filter Cutoff", skewed (80.0f, 12000.0f, 1200.0f), 1500.0f, "Hz");
+    add ("gfxFilterRes",  "Grain Filter Reso",   Range (0.0f, 1.0f), 0.3f);
+    add ("gfxCrush",      "Grain Crush Chance",  Range (0.0f, 1.0f), 0.0f);
+    add ("gfxCrushAmt",   "Grain Crush Amount",  Range (0.0f, 1.0f), 0.5f);
+    add ("gfxDrive",      "Grain Drive Chance",  Range (0.0f, 1.0f), 0.0f);
+    add ("gfxDriveAmt",   "Grain Drive Amount",  Range (0.0f, 1.0f), 0.5f);
+
     return layout;
 }
 
@@ -110,7 +130,10 @@ BrinaProcessor::BrinaProcessor()
             get ("genOctave"), get ("genRange"), get ("genLength"),
             get ("drive"), get ("wow"), get ("tone"), get ("delayTime"), get ("delayFeedback"), get ("delayMix"),
             get ("reverbSize"), get ("reverbDamp"), get ("shimmer"), get ("reverbMix"), get ("dry"), get ("volume"),
-            get ("play"), get ("kill"), get ("posMode") };
+            get ("play"), get ("kill"), get ("posMode"),
+            get ("voices"), get ("voiceSpread"), get ("voiceMode"), get ("sourceMode"),
+            get ("gfxFilter"), get ("gfxFilterFreq"), get ("gfxFilterRes"),
+            get ("gfxCrush"), get ("gfxCrushAmt"), get ("gfxDrive"), get ("gfxDriveAmt") };
 }
 
 bool BrinaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -153,6 +176,11 @@ void BrinaProcessor::readParams (brina::Params& p) const
     p.volumeDb = f (raw.volume);
     p.running = f (raw.play) > 0.5f;
     p.fixedPosition = i (raw.posMode) == 1;
+    p.grainVoices = i (raw.voices);  p.voiceSpread = f (raw.voiceSpread);
+    p.voiceMode = i (raw.voiceMode); p.sourceMode = i (raw.sourceMode);
+    p.gfxFilterChance = f (raw.gfxFilter); p.gfxFilterHz = f (raw.gfxFilterFreq); p.gfxFilterRes = f (raw.gfxFilterRes);
+    p.gfxCrushChance = f (raw.gfxCrush);   p.gfxCrush = f (raw.gfxCrushAmt);
+    p.gfxDriveChance = f (raw.gfxDrive);   p.gfxDrive = f (raw.gfxDriveAmt);
 }
 
 //==============================================================================
@@ -166,9 +194,18 @@ void BrinaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     {
         const juce::SpinLock::ScopedTryLockType lock (sampleLock);
-        if (lock.isLocked() && audioSample != current)
-            audioSample = current;
+
+        if (lock.isLocked())
+            for (size_t s = 0; s < (size_t) numSlots; ++s)
+                if (audioSample[s] != current[s])
+                    audioSample[s] = current[s];
     }
+
+    brina::SampleData* slots[numSlots];
+    for (size_t s = 0; s < (size_t) numSlots; ++s)
+        slots[s] = audioSample[s].get();
+
+    auto* recTarget = slots[(size_t) juce::jlimit (0, numSlots - 1, recordSlot.load (std::memory_order_relaxed))];
 
     brina::Params p;
     readParams (p);
@@ -220,17 +257,17 @@ void BrinaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             inL = inputCopy.getReadPointer (0);
             inR = inputCopy.getReadPointer (1);
 
-            if (recording.load (std::memory_order_relaxed) && audioSample != nullptr && audioSample->recordable)
+            if (recording.load (std::memory_order_relaxed) && recTarget != nullptr && recTarget->recordable)
             {
-                const int len = audioSample->length.load();
-                const int room = audioSample->buffer.getNumSamples() - len;
+                const int len = recTarget->length.load();
+                const int room = recTarget->buffer.getNumSamples() - len;
                 const int count = juce::jmin (n, room);
 
                 if (count > 0)
                 {
-                    audioSample->buffer.copyFrom (0, len, inL, count);
-                    audioSample->buffer.copyFrom (1, len, inR, count);
-                    audioSample->length.store (len + count);
+                    recTarget->buffer.copyFrom (0, len, inL, count);
+                    recTarget->buffer.copyFrom (1, len, inR, count);
+                    recTarget->length.store (len + count);
                 }
 
                 if (count < n)
@@ -238,7 +275,7 @@ void BrinaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
 
-        engine.process (audioSample.get(), inL, inR, outL + pos, outR + pos, n, p, bpm);
+        engine.processSlots (slots, inL, inR, outL + pos, outR + pos, n, p, bpm);
         pos += n;
     }
 
@@ -247,13 +284,16 @@ void BrinaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 }
 
 //==============================================================================
-void BrinaProcessor::setSample (brina::SampleData::Ptr s)
+void BrinaProcessor::setSample (int slot, brina::SampleData::Ptr s)
 {
+    if (! juce::isPositiveAndBelow (slot, numSlots))
+        return;
+
     brina::SampleData::Ptr old;
     {
         const juce::SpinLock::ScopedLockType lock (sampleLock);
-        old = current;
-        current = s;
+        old = current[(size_t) slot];
+        current[(size_t) slot] = s;
     }
 
     // I vecchi campioni restano qui finche' il thread audio non li ha lasciati:
@@ -267,14 +307,28 @@ void BrinaProcessor::setSample (brina::SampleData::Ptr s)
         graveyard.add (old);
 }
 
-brina::SampleData::Ptr BrinaProcessor::getSample()
+brina::SampleData::Ptr BrinaProcessor::getSample (int slot)
 {
+    if (! juce::isPositiveAndBelow (slot, numSlots))
+        return {};
+
     const juce::SpinLock::ScopedLockType lock (sampleLock);
-    return current;
+    return current[(size_t) slot];
 }
 
-juce::String BrinaProcessor::loadFile (const juce::File& file)
+void BrinaProcessor::clearSlot (int slot)
 {
+    if (recordSlot.load() == slot)
+        recording.store (false);
+
+    setSample (slot, nullptr);
+}
+
+juce::String BrinaProcessor::loadFile (const juce::File& file, int slot)
+{
+    if (! juce::isPositiveAndBelow (slot, numSlots))
+        return "Slot non valido";
+
     std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (file));
 
     if (reader == nullptr)
@@ -298,15 +352,19 @@ juce::String BrinaProcessor::loadFile (const juce::File& file)
     s->filePath = file.getFullPathName();
     s->length.store (length);
 
-    recording.store (false);
-    setSample (s);
+    if (recordSlot.load() == slot)
+        recording.store (false);
+
+    setSample (slot, s);
     return {};
 }
 
-void BrinaProcessor::startRecording()
+void BrinaProcessor::startRecording (int slot)
 {
-    if (! hasAudioInput())
+    if (! hasAudioInput() || ! juce::isPositiveAndBelow (slot, numSlots))
         return;
+
+    recording.store (false);    // se stava registrando in un altro slot, quello si ferma qui
 
     brina::SampleData::Ptr s = new brina::SampleData();
     s->buffer.setSize (2, (int) (maxRecordSeconds * hostSampleRate));
@@ -315,7 +373,8 @@ void BrinaProcessor::startRecording()
     s->name = "Recording";
     s->recordable = true;
 
-    setSample (s);
+    setSample (slot, s);
+    recordSlot.store (slot);
     recording.store (true);
 }
 
@@ -335,6 +394,45 @@ void BrinaProcessor::triggerKill()
 }
 
 //==============================================================================
+// Lo slot 1 usa gli attributi di sempre ("samplePath", "recording"): i set salvati con le versioni
+// precedenti si aprono identici. Gli altri slot aggiungono il numero: "samplePath2", "recording2"...
+static juce::String slotAttribute (const char* name, int slot)
+{
+    return slot == 0 ? juce::String (name) : juce::String (name) + juce::String (slot + 1);
+}
+
+void BrinaProcessor::saveSlot (juce::XmlElement& xml, int slot)
+{
+    auto s = getSample (slot);
+
+    if (s == nullptr)
+        return;
+
+    const int length = s->length.load();
+
+    if (s->filePath.isNotEmpty())
+    {
+        xml.setAttribute (slotAttribute ("samplePath", slot), s->filePath);
+    }
+    else if (length > 0)
+    {
+        // le registrazioni viaggiano dentro il progetto di Live, compresse in FLAC
+        juce::MemoryBlock data;
+        {
+            juce::FlacAudioFormat flac;
+            std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream> (data, false);
+            auto options = juce::AudioFormatWriterOptions().withSampleRate (s->sampleRate)
+                                                           .withNumChannels (2)
+                                                           .withBitsPerSample (16);
+            if (auto writer = flac.createWriterFor (stream, options))
+                writer->writeFromAudioSampleBuffer (s->buffer, 0, length);
+        }
+
+        if (data.getSize() > 0)
+            xml.setAttribute (slotAttribute ("recording", slot), data.toBase64Encoding());
+    }
+}
+
 void BrinaProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto xml = apvts.copyState().createXml();
@@ -342,59 +440,25 @@ void BrinaProcessor::getStateInformation (juce::MemoryBlock& dest)
     if (xml == nullptr)
         return;
 
-    if (auto s = getSample())
-    {
-        const int length = s->length.load();
+    for (int slot = 0; slot < numSlots; ++slot)
+        saveSlot (*xml, slot);
 
-        if (s->filePath.isNotEmpty())
-        {
-            xml->setAttribute ("samplePath", s->filePath);
-        }
-        else if (length > 0)
-        {
-            // le registrazioni viaggiano dentro il progetto di Live, compresse in FLAC
-            juce::MemoryBlock data;
-            {
-                juce::FlacAudioFormat flac;
-                std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream> (data, false);
-                auto options = juce::AudioFormatWriterOptions().withSampleRate (s->sampleRate)
-                                                               .withNumChannels (2)
-                                                               .withBitsPerSample (16);
-                if (auto writer = flac.createWriterFor (stream, options))
-                    writer->writeFromAudioSampleBuffer (s->buffer, 0, length);
-            }
-
-            if (data.getSize() > 0)
-                xml->setAttribute ("recording", data.toBase64Encoding());
-        }
-    }
-
+    xml->setAttribute ("uiSlot", selectedSlot.load());
     copyXmlToBinary (*xml, dest);
 }
 
-void BrinaProcessor::setStateInformation (const void* data, int size)
+void BrinaProcessor::restoreSlot (int slot, const juce::String& path, const juce::String& recordingData)
 {
-    auto xml = getXmlFromBinary (data, size);
-
-    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
-        return;
-
-    const auto path = xml->getStringAttribute ("samplePath");
-    const auto rec = xml->getStringAttribute ("recording");
-    xml->removeAttribute ("samplePath");
-    xml->removeAttribute ("recording");
-    apvts.replaceState (juce::ValueTree::fromXml (*xml));
-
     if (path.isNotEmpty())
     {
-        if (juce::File (path).existsAsFile())
-            loadFile (juce::File (path));
+        if (juce::File (path).existsAsFile() && loadFile (juce::File (path), slot).isEmpty())
+            return;
     }
-    else if (rec.isNotEmpty())
+    else if (recordingData.isNotEmpty())
     {
         juce::MemoryBlock block;
 
-        if (block.fromBase64Encoding (rec))
+        if (block.fromBase64Encoding (recordingData))
         {
             juce::FlacAudioFormat flac;
             std::unique_ptr<juce::AudioFormatReader> reader (
@@ -409,10 +473,53 @@ void BrinaProcessor::setStateInformation (const void* data, int size)
                 s->sampleRate = reader->sampleRate;
                 s->name = "Recording";
                 s->length.store (length);
-                setSample (s);
+                setSample (slot, s);
+                return;
             }
         }
     }
+
+    // Niente da caricare. Lo slot 1 resta com'era (come nelle versioni precedenti); gli altri
+    // tornano vuoti, cosi' lo stato ripristinato e' esattamente quello salvato.
+    if (slot > 0 && getSample (slot) != nullptr)
+        clearSlot (slot);
+}
+
+void BrinaProcessor::setStateInformation (const void* data, int size)
+{
+    auto xml = getXmlFromBinary (data, size);
+
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+        return;
+
+    juce::String paths[numSlots], recordings[numSlots];
+
+    for (int slot = 0; slot < numSlots; ++slot)
+    {
+        paths[slot] = xml->getStringAttribute (slotAttribute ("samplePath", slot));
+        recordings[slot] = xml->getStringAttribute (slotAttribute ("recording", slot));
+        xml->removeAttribute (slotAttribute ("samplePath", slot));
+        xml->removeAttribute (slotAttribute ("recording", slot));
+    }
+
+    selectedSlot.store (juce::jlimit (0, numSlots - 1, xml->getIntAttribute ("uiSlot", 0)));
+    xml->removeAttribute ("uiSlot");
+
+    juce::StringArray saved;
+    for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
+        saved.add (e->getStringAttribute ("id"));
+
+    apvts.replaceState (juce::ValueTree::fromXml (*xml));
+
+    // I parametri che lo stato non conosce (aggiunti dopo che e' stato salvato) tornano al default,
+    // invece di restare dove sono: cosi' un set o un preset vecchio suona come quando e' stato salvato.
+    for (auto* param : getParameters())
+        if (auto* withId = dynamic_cast<juce::AudioProcessorParameterWithID*> (param))
+            if (! saved.contains (withId->paramID))
+                param->setValueNotifyingHost (param->getDefaultValue());
+
+    for (int slot = 0; slot < numSlots; ++slot)
+        restoreSlot (slot, paths[slot], recordings[slot]);
 }
 
 //==============================================================================

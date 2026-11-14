@@ -60,9 +60,14 @@ WaveformView::WaveformView (BrinaProcessor& p) : proc (p)
     setMouseCursor (juce::MouseCursor::CrosshairCursor);
 }
 
+static int shownSlot (BrinaProcessor& proc)
+{
+    return juce::jlimit (0, BrinaProcessor::numSlots - 1, proc.selectedSlot.load());
+}
+
 void WaveformView::refresh()
 {
-    auto now = proc.getSample();
+    auto now = proc.getSample (shownSlot (proc));
     const int length = now != nullptr ? now->length.load() : 0;
 
     if (now != sample || length != lastLength)
@@ -121,9 +126,10 @@ void WaveformView::paint (juce::Graphics& g)
     {
         g.setColour (ui::dim);
         g.setFont (15.0f);
-        g.drawFittedText (BrinaProcessor::hasAudioInput()
-                              ? "Trascina qui un file audio, premi Load, oppure Rec per registrare l'ingresso della traccia"
-                              : "Trascina qui un file audio oppure premi Load",
+        g.drawFittedText ("Slot " + juce::String (shownSlot (proc) + 1) + " vuoto. "
+                              + (BrinaProcessor::hasAudioInput()
+                                     ? "Trascina qui un file audio, premi Load, oppure Rec per registrare l'ingresso della traccia"
+                                     : "Trascina qui un file audio oppure premi Load"),
                           getLocalBounds().reduced (20), juce::Justification::centred, 2);
     }
     else
@@ -147,12 +153,29 @@ void WaveformView::paint (juce::Graphics& g)
             g.fillRect ((float) x, top, 1.0f, juce::jmax (1.0f, bottom - top));
         }
 
+        // solo i grani che stanno leggendo da questo slot (il valore e' slot + posizione)
+        const float slot = (float) shownSlot (proc);
         g.setColour (ui::warm);
-        for (auto& slot : proc.engine.grainVis)
+        for (auto& vis : proc.engine.grainVis)
         {
-            const float p = slot.load (std::memory_order_relaxed);
-            if (p >= 0.0f)
+            const float p = vis.load (std::memory_order_relaxed) - slot;
+            if (p >= 0.0f && p < 1.0f)
                 g.fillRect (p * w - 1.0f, 6.0f, 2.0f, h - 12.0f);
+        }
+
+        // i punti di lettura delle altre voci, aperti a ventaglio attorno alla posizione
+        const int voices = juce::roundToInt (proc.apvts.getRawParameterValue ("voices")->load());
+        const float fan = proc.apvts.getRawParameterValue ("voiceSpread")->load() * 0.5f;
+
+        if (voices > 1 && fan > 0.0f)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.35f));
+
+            for (int k = 0; k < voices; ++k)
+            {
+                const float v = centre + ((float) k / (float) (voices - 1) - 0.5f) * fan;
+                g.fillRect ((v - std::floor (v)) * w - 0.5f, h * 0.25f, 1.0f, h * 0.5f);
+            }
         }
 
         g.setColour (juce::Colours::white);
@@ -207,10 +230,34 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     {
         status = {};
         if (proc.isRecording()) proc.stopRecording();
-        else                    proc.startRecording();
+        else                    proc.startRecording (selectedSlot());
     };
     addChildComponent (recButton);
     recButton.setVisible (BrinaProcessor::hasAudioInput());
+
+    // --- sorgenti: quattro slot, quello selezionato e' mostrato nella forma d'onda
+    for (int i = 0; i < BrinaProcessor::numSlots; ++i)
+    {
+        auto& b = slotButtons[(size_t) i];
+        b.setButtonText (juce::String (i + 1));
+        b.setColour (juce::TextButton::buttonColourId, ui::background);
+        b.setColour (juce::TextButton::buttonOnColourId, ui::accent);
+        b.setColour (juce::TextButton::textColourOnId, ui::background);
+        b.setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0)
+                             | (i < BrinaProcessor::numSlots - 1 ? juce::Button::ConnectedOnRight : 0));
+        b.setTooltip ("Slot " + juce::String (i + 1) + ": Load, Rec e il trascinamento caricano l'audio nello slot selezionato");
+        b.onClick = [this, i] { selectSlot (i); };
+        addAndMakeVisible (b);
+    }
+
+    clearButton.setColour (juce::TextButton::buttonColourId, ui::background);
+    clearButton.setTooltip ("Svuota lo slot selezionato");
+    clearButton.onClick = [this]
+    {
+        status = {};
+        proc.clearSlot (selectedSlot());
+    };
+    addAndMakeVisible (clearButton);
 
     // --- trasporto: Play/Stop (le code sfumano) e Kill (silenzio immediato)
     playButton.setClickingTogglesState (true);
@@ -247,20 +294,38 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
              { "drive", "Drive" }, { "wow", "Wow" }, { "tone", "Tone" },
              { "delayTime", "Time" }, { "delayFeedback", "Feedback" }, { "delayMix", "Mix" },
              { "reverbSize", "Size" }, { "reverbDamp", "Damp" }, { "shimmer", "Shimmer" }, { "reverbMix", "Mix" },
-             { "dry", "Dry In" }, { "volume", "Volume" } })
+             { "dry", "Dry In" }, { "volume", "Volume" },
+             { "voices", "Voices" }, { "voiceSpread", "Spread" },
+             { "gfxFilter", "Filter" }, { "gfxFilterFreq", "Cutoff" }, { "gfxFilterRes", "Reso" },
+             { "gfxCrush", "Crush" }, { "gfxCrushAmt", "Amount" },
+             { "gfxDrive", "Drive" }, { "gfxDriveAmt", "Amount" } })
         addKnob (id, title);
 
     addChoice ("genRate", "Rate");
     addChoice ("genRoot", "Root");
     addChoice ("genScale", "Scale");
+    addChoice ("voiceMode", "Intervals");
+    addChoice ("sourceMode", "Grains pick");
+    choices[sourceModeChoice]->label.setJustificationType (juce::Justification::centredRight);
+
+    knobs[voicesKnob]->slider.setTooltip ("Quanti grani nascono insieme per ogni nota (multigrain)");
+    knobs[voiceSpreadKnob]->slider.setTooltip ("Distanza tra i punti di lettura delle voci, attorno a Position");
+    choices[voiceModeChoice]->box.setTooltip ("Intervalli tra le voci: Unison (appena stonate), Octaves, Fifths, "
+                                              "Chord (terze sulla scala di Drift)");
+    choices[sourceModeChoice]->box.setTooltip ("Da quale slot legge ogni grano: Random a caso, Cycle a rotazione, "
+                                               "Per Voice una sorgente fissa per ogni voce");
+
+    for (int i : { 0, 3, 5 })
+        knobs[firstGrainFxKnob + i]->slider.setTooltip ("Quanti grani ricevono l'effetto: 0 nessuno, 1 tutti. "
+                                                        "Ogni grano puo' averne piu' di uno");
 
     addAndMakeVisible (driftButton);
     driftAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "genOn", driftButton);
 
-    knobs[26]->slider.setVisible (BrinaProcessor::hasAudioInput());
-    knobs[26]->label.setVisible (BrinaProcessor::hasAudioInput());
+    knobs[dryKnob]->slider.setVisible (BrinaProcessor::hasAudioInput());
+    knobs[dryKnob]->label.setVisible (BrinaProcessor::hasAudioInput());
 
-    setSize (880, 596);
+    setSize (880, 752);
     startTimerHz (30);
 }
 
@@ -321,8 +386,16 @@ void BrinaEditor::paint (juce::Graphics& g)
         g.fillRoundedRectangle (s.bounds.toFloat(), 6.0f);
         g.setColour (ui::accent);
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (s.title, s.bounds.getX() + 10, s.bounds.getY() + 5, 200, 14, juce::Justification::centredLeft);
+        g.drawText (s.title, s.bounds.getX() + 10, s.bounds.getY() + 5, 300, 14, juce::Justification::centredLeft);
     }
+
+    g.setColour (ui::accent);
+    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    g.drawText ("SOURCE", sourceRow.getX() + 10, sourceRow.getY(), 60, sourceRow.getHeight(), juce::Justification::centredLeft);
+
+    g.setColour (ui::outline);
+    for (auto& d : dividers)
+        g.fillRect (d);
 }
 
 void BrinaEditor::resized()
@@ -345,10 +418,27 @@ void BrinaEditor::resized()
     header.removeFromLeft (gap);
     sampleLabel.setBounds (header);
 
+    // --- sorgenti: slot 1-4, Clear, e come i grani scelgono lo slot
+    sourceRow = area.removeFromTop (24);
+    area.removeFromTop (6);
+    {
+        auto row = sourceRow.withTrimmedLeft (70);
+        for (auto& b : slotButtons)
+            b.setBounds (row.removeFromLeft (38));
+        row.removeFromLeft (gap);
+        clearButton.setBounds (row.removeFromLeft (56));
+
+        auto& pick = *choices[sourceModeChoice];
+        pick.box.setBounds (row.removeFromRight (118));
+        row.removeFromRight (6);
+        pick.label.setBounds (row.removeFromRight (90));
+    }
+
     waveform.setBounds (area.removeFromTop (150));
     area.removeFromTop (gap);
 
     sections.clear();
+    dividers.clear();
 
     auto placeKnob = [this] (int index, juce::Rectangle<int> cell)
     {
@@ -371,6 +461,43 @@ void BrinaEditor::resized()
             placeKnob (i, row.removeFromLeft (cell));
     }
 
+    auto placeChoice = [this] (int index, juce::Rectangle<int> cell)
+    {
+        auto& c = *choices[index];
+        c.label.setBounds (cell.removeFromTop (14));
+        c.box.setBounds (cell.withSizeKeepingCentre (cell.getWidth(), 26));
+    };
+
+    // --- Voices (multigrain) e Grain FX (effetti per grano)
+    {
+        auto row = area.removeFromTop (sectionHeight);
+        area.removeFromTop (gap);
+
+        auto voices = row.removeFromLeft (286);
+        row.removeFromLeft (gap);
+        sections.push_back ({ "VOICES  -  multigrain", voices });
+        {
+            auto inner = content (voices);
+            placeKnob (voicesKnob, inner.removeFromLeft (72));
+            placeKnob (voiceSpreadKnob, inner.removeFromLeft (72));
+            placeChoice (voiceModeChoice, inner.reduced (8, 0));
+        }
+
+        sections.push_back ({ "GRAIN FX  -  how many grains get each effect", row });
+        {
+            auto inner = content (row);
+            const int cell = inner.getWidth() / numGrainFxKnobs;
+
+            for (int i = 0; i < numGrainFxKnobs; ++i)
+            {
+                if (i == 3 || i == 5)   // un filo tra filtro, crush e drive
+                    dividers.push_back ({ inner.getX(), inner.getY() + 6, 1, inner.getHeight() - 12 });
+
+                placeKnob (firstGrainFxKnob + i, inner.removeFromLeft (cell));
+            }
+        }
+    }
+
     // --- Drift (generatore di note)
     auto drift = area.removeFromTop (sectionHeight);
     area.removeFromTop (gap);
@@ -379,22 +506,18 @@ void BrinaEditor::resized()
         auto row = content (drift);
         driftButton.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (60, 24));
 
-        for (auto* c : choices)
-        {
-            auto cell = row.removeFromLeft (130).reduced (8, 0);
-            c->label.setBounds (cell.removeFromTop (14));
-            c->box.setBounds (cell.withSizeKeepingCentre (cell.getWidth(), 26));
-        }
+        for (int i = 0; i < numDriftChoices; ++i)
+            placeChoice (i, row.removeFromLeft (130).reduced (8, 0));
 
         const int cell = row.getWidth() / 4;
-        for (int i = 12; i < 16; ++i)
+        for (int i = firstDriftKnob; i < firstFxKnob; ++i)
             placeKnob (i, row.removeFromLeft (cell).withSizeKeepingCentre (76, row.getHeight()));
     }
 
     // --- Tape / Delay / Reverb / Out
     auto fx = area.removeFromTop (sectionHeight);
     const int unit = (fx.getWidth() - 3 * gap) / 12;
-    int knob = 16;
+    int knob = firstFxKnob;
 
     for (auto [title, count] : std::initializer_list<std::pair<const char*, int>> {
              { "TAPE", 3 }, { "DELAY", 3 }, { "REVERB", 4 }, { "OUT", 2 } })
@@ -423,12 +546,44 @@ void BrinaEditor::timerCallback()
 
     const bool fixed = positionButton.getToggleState();
     positionButton.setButtonText (fixed ? "Position: Fixed" : "Position: Auto");
-    knobs[9]->slider.setEnabled (! fixed);   // Scan non ha effetto a posizione fissa
+    knobs[scanKnob]->slider.setEnabled (! fixed);   // Scan non ha effetto a posizione fissa
+
+    // --- slot: selezionato, pieno o vuoto, in registrazione
+    const int slot = selectedSlot();
+    int filled = 0;
+
+    for (int i = 0; i < BrinaProcessor::numSlots; ++i)
+    {
+        auto s = proc.getSample (i);
+        const bool full = s != nullptr && s->length.load() > 0;
+        const bool recHere = rec && proc.getRecordingSlot() == i;
+        filled += full ? 1 : 0;
+
+        auto& b = slotButtons[(size_t) i];
+        b.setToggleState (i == slot, juce::dontSendNotification);
+        b.setColour (juce::TextButton::textColourOffId, recHere ? juce::Colour (0xffe0655c) : (full ? ui::text : ui::dim.withAlpha (0.6f)));
+        b.setColour (juce::TextButton::buttonOnColourId, recHere ? juce::Colour (0xffc8443c) : ui::accent);
+    }
+
+    clearButton.setEnabled (proc.getSample (slot) != nullptr);
+    choices[sourceModeChoice]->box.setEnabled (filled > 1);     // con una sola sorgente non c'e' scelta
+
+    // --- i controlli che al momento non hanno effetto si spengono
+    auto value = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
+    const bool multi = juce::roundToInt (value ("voices")) > 1;
+    knobs[voiceSpreadKnob]->slider.setEnabled (multi);
+    choices[voiceModeChoice]->box.setEnabled (multi);
+
+    const bool filterOn = value ("gfxFilter") > 0.0f, crushOn = value ("gfxCrush") > 0.0f, driveOn = value ("gfxDrive") > 0.0f;
+    knobs[firstGrainFxKnob + 1]->slider.setEnabled (filterOn);
+    knobs[firstGrainFxKnob + 2]->slider.setEnabled (filterOn);
+    knobs[firstGrainFxKnob + 4]->slider.setEnabled (crushOn);
+    knobs[firstGrainFxKnob + 6]->slider.setEnabled (driveOn);
 
     juce::String text = status;
 
     if (text.isEmpty())
-        if (auto s = proc.getSample())
+        if (auto s = proc.getSample (slot))
             if (s->length.load() > 0)
                 text = s->name + "   " + juce::String ((double) s->length.load() / s->sampleRate, 1) + " s";
 
@@ -436,16 +591,32 @@ void BrinaEditor::timerCallback()
         sampleLabel.setText (text, juce::dontSendNotification);
 }
 
-void BrinaEditor::load (const juce::File& file)
+void BrinaEditor::selectSlot (int slot)
 {
-    status = proc.loadFile (file);
+    status = {};
+    proc.selectedSlot.store (juce::jlimit (0, BrinaProcessor::numSlots - 1, slot));
+    waveform.refresh();
+}
+
+void BrinaEditor::load (const juce::File& file, int slot)
+{
+    status = proc.loadFile (file, slot);
 }
 
 void BrinaEditor::filesDropped (const juce::StringArray& files, int, int)
 {
     waveform.dragHover = false;
-    if (! files.isEmpty())
-        load (juce::File (files[0]));
+
+    // piu' file insieme riempiono gli slot uno dopo l'altro, a partire da quello selezionato
+    const int first = selectedSlot();
+
+    for (int i = 0; i < files.size() && first + i < BrinaProcessor::numSlots; ++i)
+    {
+        load (juce::File (files[i]), first + i);
+
+        if (status.isNotEmpty())
+            break;
+    }
 }
 
 void BrinaEditor::openChooser()
@@ -453,10 +624,10 @@ void BrinaEditor::openChooser()
     chooser = std::make_unique<juce::FileChooser> ("Scegli un file audio", juce::File(), proc.getFormatWildcard());
 
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc)
+                          [this, slot = selectedSlot()] (const juce::FileChooser& fc)
                           {
                               const auto file = fc.getResult();
                               if (file.existsAsFile())
-                                  load (file);
+                                  load (file, slot);
                           });
 }

@@ -23,7 +23,7 @@ public:
 };
 
 //==============================================================================
-/** Forma d'onda del campione, con posizione, zona di spray e grani attivi. */
+/** Forma d'onda dello slot selezionato, con posizione, zona di spray, voci e grani attivi. */
 class WaveformView : public juce::Component
 {
 public:
@@ -82,17 +82,27 @@ private:
 
     struct Section { juce::String title; juce::Rectangle<int> bounds; };
 
+    // posizioni in "knobs" e "choices", nell'ordine in cui vengono creati
+    enum KnobIndex { scanKnob = 9, firstDriftKnob = 12, firstFxKnob = 16, dryKnob = 26,
+                     voicesKnob = 28, voiceSpreadKnob = 29, firstGrainFxKnob = 30, numGrainFxKnobs = 7 };
+    enum ChoiceIndex { numDriftChoices = 3, voiceModeChoice = 3, sourceModeChoice = 4 };
+
     Knob& addKnob (const char* paramId, const char* title);
     Choice& addChoice (const char* paramId, const char* title);
     void timerCallback() override;
-    void load (const juce::File&);
+    void load (const juce::File&, int slot);
     void openChooser();
+    void selectSlot (int slot);
+    int selectedSlot() const { return juce::jlimit (0, BrinaProcessor::numSlots - 1, proc.selectedSlot.load()); }
 
     BrinaProcessor& proc;
     BrinaLookAndFeel lookAndFeel;
     WaveformView waveform;
 
-    juce::TextButton loadButton { "Load" }, recButton { "Rec" };
+    juce::TextButton loadButton { "Load" }, recButton { "Rec" }, clearButton { "Clear" };
+    std::array<juce::TextButton, BrinaProcessor::numSlots> slotButtons;
+    juce::Rectangle<int> sourceRow;
+    std::vector<juce::Rectangle<int>> dividers;
     juce::TextButton playButton { "Playing" }, killButton { "Kill" }, positionButton { "Position: Auto" };
     juce::ToggleButton driftButton { "On" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> driftAttachment, playAttachment, positionAttachment;

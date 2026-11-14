@@ -47,6 +47,16 @@ struct Params
     // Trasporto e modo della posizione
     bool  running = true;         // false: niente note ne' grani nuovi, le code sfumano da sole
     bool  fixedPosition = false;  // true: la posizione resta ferma su Position (Scan ignorato)
+    // Voci di grani (multigrain): a ogni nascita partono piu' grani insieme, uno per voce
+    int   grainVoices = 1;        // 1..8
+    float voiceSpread = 0.3f;     // distanza tra i punti di lettura delle voci
+    int   voiceMode = 0;          // intervalli tra le voci, vedi voiceModeNames()
+    // Sorgenti: fino a 4 slot audio, ogni grano sceglie da quale leggere
+    int   sourceMode = 1;         // vedi sourceModeNames()
+    // Effetti per grano: probabilita' che un grano nasca con l'effetto, piu' i parametri dell'effetto
+    float gfxFilterChance = 0.0f, gfxFilterHz = 1500.0f, gfxFilterRes = 0.3f;
+    float gfxCrushChance = 0.0f, gfxCrush = 0.5f;
+    float gfxDriveChance = 0.0f, gfxDrive = 0.5f;
 };
 
 inline const juce::StringArray& rateNames()
@@ -60,6 +70,32 @@ inline const juce::StringArray& scaleNames()
     static const juce::StringArray n { "Major", "Minor", "Penta Maj", "Penta Min",
                                        "Dorian", "Lydian", "Whole Tone", "Chromatic" };
     return n;
+}
+
+inline const juce::StringArray& voiceModeNames()
+{
+    static const juce::StringArray n { "Unison", "Octaves", "Fifths", "Chord" };
+    return n;
+}
+
+inline const juce::StringArray& sourceModeNames()
+{
+    static const juce::StringArray n { "Random", "Cycle", "Per Voice" };
+    return n;
+}
+
+/** Semitoni del grado \p degree (anche oltre l'ottava) nella scala \p scale di scaleNames(). */
+inline int scaleSemitones (int scale, int degree)
+{
+    static const int scales[8][12] = {
+        { 0, 2, 4, 5, 7, 9, 11 }, { 0, 2, 3, 5, 7, 8, 10 }, { 0, 2, 4, 7, 9 }, { 0, 3, 5, 7, 10 },
+        { 0, 2, 3, 5, 7, 9, 10 }, { 0, 2, 4, 6, 7, 9, 11 }, { 0, 2, 4, 6, 8, 10 },
+        { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 } };
+    static const int scaleLen[8] = { 7, 7, 5, 5, 7, 7, 6, 12 };
+
+    const int sc = juce::jlimit (0, 7, scale);
+    const int d = juce::jmax (0, degree);
+    return scales[sc][d % scaleLen[sc]] + 12 * (d / scaleLen[sc]);
 }
 
 inline const juce::StringArray& noteNames()
@@ -122,12 +158,15 @@ private:
 class Engine
 {
 public:
-    static constexpr int maxVoices = 12;
-    static constexpr int maxGrains = 160;
-    static constexpr int numVis = 48;
+    static constexpr int maxVoices = 12;        // note suonate insieme
+    static constexpr int maxGrainVoices = 8;    // grani che nascono insieme per ogni nota (multigrain)
+    static constexpr int numSlots = 4;          // sorgenti audio
+    static constexpr int maxGrains = 384;       // con otto voci; con una sola restano i 160 di sempre
+    static constexpr int numVis = 96;
     static constexpr int maxBlock = 2048;
 
-    /** Posizioni (0..1) dei grani attivi, per l'interfaccia. -1 = vuoto. */
+    /** Grani attivi, per l'interfaccia: slot + posizione (0..1), cioe' 2.25 = terzo slot a un quarto.
+        -1 = vuoto. */
     std::array<std::atomic<float>, numVis> grainVis;
     std::atomic<float> scanVis { 0.0f };
 
@@ -178,6 +217,10 @@ public:
         samplesToStep = 0.0;
         lastReverbSize = lastReverbDamp = -1.0f;
     }
+
+    /** Fissa il seme dei numeri casuali: due motori con lo stesso seme e gli stessi parametri danno
+        la stessa uscita, campione per campione. Serve ai test; di norma il seme e' casuale. */
+    void setRandomSeed (juce::int64 seed) { rng.setSeed (seed); }
 
     //==========================================================================
     void noteOn (int note, float velocity, int lengthSamples = -1)
@@ -233,15 +276,39 @@ public:
     }
 
     //==========================================================================
-    /** in* puo' essere nullptr (strumento). in e out non devono sovrapporsi. n <= maxBlock. */
+    /** Un solo campione, nel primo slot. */
     void process (SampleData* sample, const float* inL, const float* inR,
                   float* outL, float* outR, int n, const Params& p, double bpm)
+    {
+        SampleData* slots[numSlots] = { sample, nullptr, nullptr, nullptr };
+        processSlots (slots, inL, inR, outL, outR, n, p, bpm);
+    }
+
+    /** slots: numSlots puntatori, anche nullptr (slot vuoto). in* puo' essere nullptr (strumento).
+        in e out non devono sovrapporsi. n <= maxBlock. */
+    void processSlots (SampleData* const* slots, const float* inL, const float* inR,
+                       float* outL, float* outR, int n, const Params& p, double bpm)
     {
         jassert (n <= maxBlock);
         std::fill (mixL.begin(), mixL.begin() + n, 0.0f);
         std::fill (mixR.begin(), mixR.begin() + n, 0.0f);
 
-        const int len = sample != nullptr ? juce::jmin (sample->length.load(), sample->buffer.getNumSamples()) : 0;
+        // --- sorgenti suonabili in questo blocco
+        numPlayable = 0;
+        refSlot = -1;
+
+        for (int s = 0; s < numSlots; ++s)
+        {
+            auto* data = slots[s];
+            slotData[(size_t) s] = data;
+            slotLen[(size_t) s] = data != nullptr ? juce::jmin (data->length.load(), data->buffer.getNumSamples()) : 0;
+
+            if (slotLen[(size_t) s] >= 256)
+            {
+                playable[(size_t) numPlayable++] = s;
+                if (refSlot < 0) refSlot = s;   // la prima sorgente suonabile da' il passo allo Scan
+            }
+        }
 
         // --- start / stop
         if (p.running != running)
@@ -268,12 +335,12 @@ public:
             }
 
             const int chunk = juce::jmin (n - done, juce::jmax (1, (int) std::ceil (samplesToStep)));
-            renderGrains (sample, len, mixL.data() + done, mixR.data() + done, chunk, p);
+            renderGrains (mixL.data() + done, mixR.data() + done, chunk, p);
             samplesToStep -= chunk;
             done += chunk;
         }
 
-        updateVis (len);
+        updateVis();
         effects (mixL.data(), mixR.data(), n, p);
 
         // --- uscita
@@ -318,13 +385,24 @@ private:
         juce::uint32 age = 0;
     };
 
+    enum GrainFx : juce::uint8 { fxFilter = 1, fxCrush = 2, fxDrive = 4 };
+
     struct Grain
     {
         bool active = false;
+        int slot = 0;
         double pos = 0.0, inc = 1.0;
         float winPhase = 0.0f, winInc = 0.0f;
         float gainL = 0.0f, gainR = 0.0f;
         int remaining = 0, delay = 0;
+
+        // effetti del grano, decisi alla nascita (maschera di GrainFx)
+        juce::uint8 fx = 0;
+        float fA1 = 0.0f, fA2 = 0.0f, fA3 = 0.0f, fGain = 1.0f;     // passa-basso a variabili di stato
+        float s1L = 0.0f, s2L = 0.0f, s1R = 0.0f, s2R = 0.0f;
+        float crushStep = 0.0f, crushInv = 0.0f, holdL = 0.0f, holdR = 0.0f;   // riduzione di bit + sample & hold
+        int holdLen = 1, holdLeft = 0;
+        float driveK = 1.0f, driveMakeup = 1.0f;
     };
 
     //==========================================================================
@@ -337,10 +415,6 @@ private:
 
     void generatorStep (const Params& p, double stepSamples)
     {
-        static const int scales[8][12] = {
-            { 0, 2, 4, 5, 7, 9, 11 }, { 0, 2, 3, 5, 7, 8, 10 }, { 0, 2, 4, 7, 9 }, { 0, 3, 5, 7, 10 },
-            { 0, 2, 3, 5, 7, 9, 10 }, { 0, 2, 4, 6, 7, 9, 11 }, { 0, 2, 4, 6, 8, 10 },
-            { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 } };
         static const int scaleLen[8] = { 7, 7, 5, 5, 7, 7, 6, 12 };
 
         if (rng.nextFloat() >= p.genProb)
@@ -360,7 +434,7 @@ private:
 
         auto toNote = [&] (int degree)
         {
-            const int n = 60 + p.genRoot + 12 * p.genOctave + scales[sc][degree % degrees] + 12 * (degree / degrees);
+            const int n = 60 + p.genRoot + 12 * p.genOctave + scaleSemitones (sc, degree);
             return juce::jlimit (0, 127, n);
         };
 
@@ -372,15 +446,77 @@ private:
     }
 
     //==========================================================================
-    void spawnGrain (const Voice& v, const SampleData& sample, int len, int offset, const Params& p, float norm)
+    /** Intervallo in semitoni della voce di grani k rispetto alla nota (la voce 0 resta sulla nota). */
+    static float voiceInterval (int k, const Params& p)
     {
+        static const float octaves[maxGrainVoices] = { 0, 12, -12, 24, 0, 12, -12, 24 };
+        static const float fifths[maxGrainVoices]  = { 0, 7, 12, 19, -12, -5, 24, 14 };
+
+        if (k <= 0)
+            return 0.0f;
+
+        k = juce::jmin (k, maxGrainVoices - 1);
+        const float unison = (k & 1 ? 1.0f : -1.0f) * (float) ((k + 1) / 2) * 0.07f;   // +-7, 14, 21, 28 cent
+
+        switch (p.voiceMode)
+        {
+            case 1:  return octaves[k] + (k >= 4 ? unison : 0.0f);         // i doppioni un filo stonati
+            case 2:  return fifths[k];
+            case 3:  return (float) scaleSemitones (p.genScale, 2 * k);    // terze sovrapposte sulla scala di Drift
+            default: return unison;
+        }
+    }
+
+    /** Lo slot da cui legge il prossimo grano della voce k, -1 se non c'e' niente da suonare. */
+    int pickSlot (int k, const Params& p)
+    {
+        if (numPlayable <= 1)
+            return numPlayable == 1 ? playable[0] : -1;
+
+        switch (p.sourceMode)
+        {
+            case 0:  return playable[(size_t) rng.nextInt (numPlayable)];
+            case 2:  return playable[(size_t) (k % numPlayable)];
+            default: return playable[(size_t) (cycle++ % (juce::uint32) numPlayable)];
+        }
+    }
+
+    /** Una nascita: un grano per voce. La voce 0 parte subito, le altre si distribuiscono
+        nell'intervallo fino alla nascita successiva, cosi' la nuvola resta fitta e non pulsa. */
+    void spawnGrains (const Voice& v, int offset, const Params& p, float norm, double interval)
+    {
+        const int count = juce::jlimit (1, maxGrainVoices, p.grainVoices);
+
+        for (int k = 0; k < count; ++k)
+        {
+            const int stagger = k == 0 ? 0 : (int) (interval * ((double) k + rng.nextDouble() - 0.5) / (double) count);
+            spawnGrain (v, k, count, offset + stagger, p, norm);
+        }
+    }
+
+    void spawnGrain (const Voice& v, int k, int count, int offset, const Params& p, float norm)
+    {
+        // il tetto dei grani cresce con le voci: con una voce e' quello di prima (stesso suono e
+        // stesso carico anche nei set piu' densi), con otto arriva a maxGrains
+        const int limit = juce::jmin (maxGrains, 160 + 32 * (count - 1));
+
         Grain* g = nullptr;
-        for (auto& c : grains)
-            if (! c.active) { g = &c; break; }
+        for (int i = 0; i < limit; ++i)
+            if (! grains[(size_t) i].active) { g = &grains[(size_t) i]; break; }
         if (g == nullptr)
             return;
 
-        float semis = (float) (v.note - 60) + p.pitch + (rng.nextFloat() * 2.0f - 1.0f) * p.detuneCents * 0.01f;
+        const int slot = pickSlot (k, p);
+        if (slot < 0)
+            return;
+
+        const SampleData& sample = *slotData[(size_t) slot];
+        const int len = slotLen[(size_t) slot];
+
+        // Con una voce sola, un solo slot e nessun effetto, i numeri casuali vengono estratti nello
+        // stesso ordine di prima: i set salvati suonano identici.
+        float semis = (float) (v.note - 60) + p.pitch + voiceInterval (k, p)
+                    + (rng.nextFloat() * 2.0f - 1.0f) * p.detuneCents * 0.01f;
 
         if (rng.nextFloat() < p.octaves)
         {
@@ -391,9 +527,12 @@ private:
         double inc = std::pow (2.0, (double) semis / 12.0) * sample.sampleRate / sr;
         inc = juce::jlimit (0.02, 16.0, inc);
 
+        // le voci si aprono a ventaglio attorno a Position (-0.5 .. +0.5) e nello stereo
+        const float fan = count > 1 ? (float) k / (float) (count - 1) - 0.5f : 0.0f;
+
         const int grainLen = juce::jmax (32, (int) (p.sizeMs * 0.001 * sr));
         const double spray = (double) p.spray * p.spray * 0.5 * len * (rng.nextDouble() * 2.0 - 1.0);
-        double pos = (double) wrap01 (p.position + (float) scanPhase) * len + spray;
+        double pos = (double) wrap01 (p.position + (float) scanPhase + fan * p.voiceSpread * 0.5f) * len + spray;
         pos = std::fmod (pos, (double) len);
         if (pos < 0.0) pos += len;
 
@@ -403,10 +542,13 @@ private:
             inc = -inc;
         }
 
-        const float pan = 0.5f + (rng.nextFloat() - 0.5f) * p.spread;
+        const float scatter = (rng.nextFloat() - 0.5f) * p.spread;
+        const float pan = count > 1 ? juce::jlimit (0.0f, 1.0f, 0.5f + fan * 0.7f * p.spread + scatter * 0.6f)
+                                    : 0.5f + scatter;
         const float amp = v.vel * v.env * norm;
 
         g->active = true;
+        g->slot = slot;
         g->pos = pos;
         g->inc = inc;
         g->winPhase = 0.0f;
@@ -415,13 +557,108 @@ private:
         g->gainR = amp * std::sin (pan * juce::MathConstants<float>::halfPi);
         g->remaining = grainLen;
         g->delay = offset;
+        assignGrainFx (*g, p);
     }
 
-    void renderGrains (SampleData* sample, int len, float* outL, float* outR, int n, const Params& p)
+    void assignGrainFx (Grain& g, const Params& p)
     {
-        const bool canPlay = sample != nullptr && len >= 256;
+        g.fx = 0;
+
+        if (p.gfxFilterChance > 0.0f && rng.nextFloat() < p.gfxFilterChance)
+        {
+            // ogni grano filtrato ha un taglio un po' diverso (+-mezza ottava): suona piu' vivo
+            const float hz = juce::jlimit (30.0f, 0.45f * (float) sr, p.gfxFilterHz * std::exp2 (rng.nextFloat() - 0.5f));
+            const float k = 2.0f - 1.75f * juce::jlimit (0.0f, 1.0f, p.gfxFilterRes);
+            const float gc = std::tan (juce::MathConstants<float>::pi * hz / (float) sr);
+            g.fA1 = 1.0f / (1.0f + gc * (gc + k));
+            g.fA2 = gc * g.fA1;
+            g.fA3 = gc * g.fA2;
+            g.fGain = std::sqrt (k * 0.5f);   // compensa il picco della risonanza
+            g.s1L = g.s2L = g.s1R = g.s2R = 0.0f;
+            g.fx |= fxFilter;
+        }
+
+        if (p.gfxCrushChance > 0.0f && rng.nextFloat() < p.gfxCrushChance)
+        {
+            const float amount = juce::jlimit (0.0f, 1.0f, p.gfxCrush);
+            g.crushStep = 2.0f / std::exp2 (16.0f - 13.0f * amount);       // da 16 a 3 bit
+            g.crushInv = 1.0f / g.crushStep;
+            g.holdLen = 1 + juce::roundToInt (amount * amount * 24.0f * (float) sr / 44100.0f);
+            g.holdLeft = 0;
+            g.holdL = g.holdR = 0.0f;
+            g.fx |= fxCrush;
+        }
+
+        if (p.gfxDriveChance > 0.0f && rng.nextFloat() < p.gfxDriveChance)
+        {
+            g.driveK = 1.0f + 11.0f * juce::jlimit (0.0f, 1.0f, p.gfxDrive);
+            g.driveMakeup = 1.0f / std::pow (g.driveK, 0.6f);
+            g.fx |= fxDrive;
+        }
+    }
+
+    /** Arrotonda al gradino piu' vicino. I valori sono piccoli (|x| / step < 2^16), il cast basta. */
+    static float quantise (float x, float step, float inv)
+    {
+        const float q = x * inv;
+        return (float) (int) (q + (q >= 0.0f ? 0.5f : -0.5f)) * step;
+    }
+
+    /** Saturazione morbida, molto vicina a tanh ma senza funzioni lente: gira per ogni campione di
+        ogni grano. Arriva esattamente a +-1 per |x| >= 3. */
+    static float softClip (float x)
+    {
+        x = juce::jlimit (-3.0f, 3.0f, x);
+        const float x2 = x * x;
+        return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+    }
+
+    /** Catena del grano: crush -> drive -> filtro. Viene prima della finestra, cosi' non fa click. */
+    static void grainFx (Grain& g, float& l, float& r)
+    {
+        if (g.fx & fxCrush)
+        {
+            if (--g.holdLeft <= 0)
+            {
+                g.holdLeft = g.holdLen;
+                g.holdL = quantise (l, g.crushStep, g.crushInv);
+                g.holdR = quantise (r, g.crushStep, g.crushInv);
+            }
+
+            l = g.holdL;
+            r = g.holdR;
+        }
+
+        if (g.fx & fxDrive)
+        {
+            l = softClip (l * g.driveK) * g.driveMakeup;
+            r = softClip (r * g.driveK) * g.driveMakeup;
+        }
+
+        if (g.fx & fxFilter)
+        {
+            auto svf = [&g] (float x, float& s1, float& s2)
+            {
+                const float v3 = x - s2;
+                const float v1 = g.fA1 * s1 + g.fA2 * v3;
+                const float v2 = s2 + g.fA2 * s1 + g.fA3 * v3;
+                s1 = 2.0f * v1 - s1;
+                s2 = 2.0f * v2 - s2;
+                return v2 * g.fGain;
+            };
+
+            l = svf (l, g.s1L, g.s2L);
+            r = svf (r, g.s1R, g.s2R);
+        }
+    }
+
+    void renderGrains (float* outL, float* outR, int n, const Params& p)
+    {
+        const bool canPlay = numPlayable > 0;
         const double interval = sr / juce::jmax (0.5f, p.density);
-        const float norm = 0.6f / std::sqrt (juce::jmax (1.0f, p.density * p.sizeMs * 0.001f));
+        // piu' voci = piu' grani sovrapposti: il livello resta quello di una voce sola
+        const float voicesNorm = 1.0f / std::sqrt ((float) juce::jlimit (1, maxGrainVoices, p.grainVoices));
+        const float norm = voicesNorm * 0.6f / std::sqrt (juce::jmax (1.0f, p.density * p.sizeMs * 0.001f));
         const float attackStep = 1.0f / juce::jmax (1.0f, p.attackMs * 0.001f * (float) sr);
         const float releaseStep = 1.0f / juce::jmax (1.0f, p.releaseMs * 0.001f * (float) sr);
 
@@ -454,7 +691,7 @@ private:
                 if (v.untilGrain <= 0.0)
                 {
                     if (canPlay)
-                        spawnGrain (v, *sample, len, i, p, norm);
+                        spawnGrains (v, i, p, norm, interval);
                     v.untilGrain += interval * (0.5 + rng.nextDouble());
                 }
             }
@@ -462,7 +699,7 @@ private:
 
         if (canPlay && running && ! p.fixedPosition)
         {
-            scanPhase += (double) p.scan * n * sample->sampleRate / (sr * len);
+            scanPhase += (double) p.scan * n * slotData[(size_t) refSlot]->sampleRate / (sr * slotLen[(size_t) refSlot]);
             scanPhase -= std::floor (scanPhase);
         }
 
@@ -473,16 +710,20 @@ private:
             return;
         }
 
-        const float* srcL = sample->buffer.getReadPointer (0);
-        const float* srcR = sample->buffer.getReadPointer (sample->buffer.getNumChannels() > 1 ? 1 : 0);
-        const double dlen = (double) len;
-
         for (auto& g : grains)
         {
             if (! g.active)
                 continue;
 
-            if (g.pos >= dlen) { g.active = false; continue; }   // il campione e' cambiato
+            const int len = slotLen[(size_t) g.slot];
+            const double dlen = (double) len;
+
+            // slot svuotato, oppure campione cambiato con uno piu' corto: il grano si spegne
+            if (len < 256 || g.pos >= dlen) { g.active = false; continue; }
+
+            const auto& buf = slotData[(size_t) g.slot]->buffer;
+            const float* srcL = buf.getReadPointer (0);
+            const float* srcR = buf.getReadPointer (buf.getNumChannels() > 1 ? 1 : 0);
 
             int i = g.delay;
             g.delay = 0;
@@ -500,8 +741,14 @@ private:
                 if (i2 >= len) i2 -= len;
                 if (i3 >= len) i3 -= len;
 
-                outL[i] += g.gainL * w * hermite (srcL[i0], srcL[i1], srcL[i2], srcL[i3], f);
-                outR[i] += g.gainR * w * hermite (srcR[i0], srcR[i1], srcR[i2], srcR[i3], f);
+                float sl = hermite (srcL[i0], srcL[i1], srcL[i2], srcL[i3], f);
+                float sr2 = hermite (srcR[i0], srcR[i1], srcR[i2], srcR[i3], f);
+
+                if (g.fx != 0)
+                    grainFx (g, sl, sr2);
+
+                outL[i] += g.gainL * w * sl;
+                outR[i] += g.gainR * w * sr2;
 
                 g.winPhase += g.winInc;
                 g.pos += g.inc;
@@ -532,16 +779,24 @@ private:
 
     static float wrap01 (float x) { return x - std::floor (x); }
 
-    void updateVis (int len)
+    void updateVis()
     {
-        int slot = 0;
-        if (len > 0)
-            for (auto& g : grains)
-                if (g.active && slot < numVis)
-                    grainVis[(size_t) slot++].store ((float) (g.pos / (double) len), std::memory_order_relaxed);
+        int index = 0;
 
-        while (slot < numVis)
-            grainVis[(size_t) slot++].store (-1.0f, std::memory_order_relaxed);
+        for (auto& g : grains)
+        {
+            if (index >= numVis)
+                break;
+
+            const int len = slotLen[(size_t) g.slot];
+
+            if (g.active && len > 0)
+                grainVis[(size_t) index++].store ((float) g.slot + juce::jlimit (0.0f, 0.999f, (float) (g.pos / (double) len)),
+                                                  std::memory_order_relaxed);
+        }
+
+        while (index < numVis)
+            grainVis[(size_t) index++].store (-1.0f, std::memory_order_relaxed);
 
         scanVis.store ((float) scanPhase, std::memory_order_relaxed);
     }
@@ -670,6 +925,13 @@ private:
     double sr = 44100.0;
     std::array<Voice, maxVoices> voices;
     std::array<Grain, maxGrains> grains;
+
+    // sorgenti del blocco in corso (valide solo dentro processSlots)
+    std::array<SampleData*, numSlots> slotData {};
+    std::array<int, numSlots> slotLen {};
+    std::array<int, numSlots> playable {};
+    int numPlayable = 0, refSlot = -1;
+    juce::uint32 cycle = 0;
     juce::uint32 ageCounter = 0;
     juce::Random rng;
     double scanPhase = 0.0, samplesToStep = 0.0;

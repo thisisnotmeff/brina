@@ -9,6 +9,7 @@ class BrinaProcessor : public juce::AudioProcessor
 public:
     static constexpr double maxRecordSeconds = 60.0;
     static constexpr double maxFileSeconds = 300.0;
+    static constexpr int numSlots = brina::Engine::numSlots;
 
     BrinaProcessor();
     ~BrinaProcessor() override = default;
@@ -39,16 +40,24 @@ public:
     //==========================================================================
     static bool hasAudioInput();
 
-    /** Thread dei messaggi. Restituisce un messaggio d'errore, vuoto se e' andata bene. */
-    juce::String loadFile (const juce::File&);
-    void startRecording();
+    /** Le sorgenti audio sono numSlots; "slot" va da 0 a numSlots - 1. Senza indicarlo si usa
+        il primo, che e' il campione unico delle versioni precedenti.
+
+        Thread dei messaggi. Restituisce un messaggio d'errore, vuoto se e' andata bene. */
+    juce::String loadFile (const juce::File&, int slot = 0);
+    void clearSlot (int slot);
+    void startRecording (int slot = 0);
     void stopRecording();
     bool isRecording() const { return recording.load(); }
+    int getRecordingSlot() const { return recordSlot.load(); }
 
     /** Kill: silenzio immediato, azzera note, grani e code degli effetti. */
     void triggerKill();
 
-    brina::SampleData::Ptr getSample();
+    brina::SampleData::Ptr getSample (int slot = 0);
+
+    /** Lo slot mostrato nell'interfaccia (su cui agiscono Load, Rec e il trascinamento). */
+    std::atomic<int> selectedSlot { 0 };
     juce::String getFormatWildcard() { return formatManager.getWildcardForAllFormats(); }
 
     juce::AudioProcessorValueTreeState apvts;
@@ -56,18 +65,21 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
-    void setSample (brina::SampleData::Ptr);
+    void setSample (int slot, brina::SampleData::Ptr);
     void readParams (brina::Params&) const;
+    void saveSlot (juce::XmlElement&, int slot);
+    void restoreSlot (int slot, const juce::String& path, const juce::String& recordingData);
 
     juce::AudioFormatManager formatManager;
 
     juce::SpinLock sampleLock;
-    brina::SampleData::Ptr current;    // protetto da sampleLock
+    std::array<brina::SampleData::Ptr, numSlots> current;      // protetto da sampleLock
     juce::ReferenceCountedArray<brina::SampleData> graveyard; // mai liberati dal thread audio
     juce::CriticalSection graveyardLock;
-    brina::SampleData::Ptr audioSample; // usato solo dal thread audio
+    std::array<brina::SampleData::Ptr, numSlots> audioSample;  // usato solo dal thread audio
 
     std::atomic<bool> recording { false };
+    std::atomic<int> recordSlot { 0 };
     double hostSampleRate = 44100.0;
     bool lastKill = false;              // usato solo dal thread audio
     juce::AudioBuffer<float> inputCopy;
@@ -79,7 +91,9 @@ private:
                            *genOn, *genRate, *genProb, *genRoot, *genScale, *genOctave, *genRange, *genLength,
                            *drive, *wow, *tone, *delayTime, *delayFeedback, *delayMix,
                            *reverbSize, *reverbDamp, *shimmer, *reverbMix, *dry, *volume,
-                           *play, *kill, *posMode;
+                           *play, *kill, *posMode,
+                           *voices, *voiceSpread, *voiceMode, *sourceMode,
+                           *gfxFilter, *gfxFilterFreq, *gfxFilterRes, *gfxCrush, *gfxCrushAmt, *gfxDrive, *gfxDriveAmt;
     } raw {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BrinaProcessor)
