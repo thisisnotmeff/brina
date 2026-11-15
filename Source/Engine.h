@@ -70,7 +70,29 @@ struct Params : GrainParams
     float gfxFilterChance = 0.0f, gfxFilterHz = 1500.0f, gfxFilterRes = 0.3f;
     float gfxCrushChance = 0.0f, gfxCrush = 0.5f;
     float gfxDriveChance = 0.0f, gfxDrive = 0.5f;
+    // Grain shape: chance that a grain gets the chosen shape instead of the usual Hann window
+    int   grainShape = 0;         // see shapeNames()
+    float shapeChance = 0.0f;
+    // Morph: the four lanes sit on the corners of an XY pad; the point crossfades their levels
+    // (equal power, among the lanes that hold a sample). morphAmt 0 = lanes play as set
+    float morphX = 0.5f, morphY = 0.5f, morphAmt = 0.0f;
+    // Weather: slow macro modulation of every lane's density, spray and size, and of the tape tone.
+    // It works on a copy of the parameters, so the knobs (and Live's automation) never move
+    float weatherAmt = 0.0f, weatherRate = 180.0f;   // seconds per slow cycle
+    int   weatherMood = 1;        // see weatherMoodNames()
 };
+
+inline const juce::StringArray& shapeNames()
+{
+    static const juce::StringArray n { "Swell", "Twin", "Tremolo", "Pluck", "Random" };
+    return n;
+}
+
+inline const juce::StringArray& weatherMoodNames()
+{
+    static const juce::StringArray n { "Calm", "Breeze", "Storm", "Changing" };
+    return n;
+}
 
 inline const juce::StringArray& rateNames()
 {
@@ -162,6 +184,106 @@ private:
 };
 
 //==============================================================================
+/** Weather: a slow, random but coherent modulation of every lane's density, spray and size and
+    of the tape tone. Two layers of smooth noise: a slow one (one cycle every weatherRate seconds)
+    and gusts, six times faster. Mood sets how rough the sky is; Changing lets it change on its own.
+    All lanes share the same sky. It works on a copy of the parameters, so the knobs (and Live's
+    automation) never move, and it has its own random generator, so the grain sequence does not
+    change. No allocation. */
+class Weather
+{
+public:
+    void prepare (double sampleRate)
+    {
+        sr = sampleRate;
+        for (auto& n : slow) n.init (rng);
+        gust.init (rng);
+        mood.init (rng);
+        storm = -1.0f;
+    }
+
+    void setSeed (juce::int64 seed) { rng.setSeed (seed); }
+
+    /** Lets \p n samples go by. */
+    void advance (int n, const Params& p)
+    {
+        const double cycle = juce::jlimit (5.0, 3600.0, (double) p.weatherRate) * sr;
+        const double dt = (double) n / cycle;
+        for (auto& s : slow) s.advance (dt, rng);
+        gust.advance (dt * 6.0, rng);
+        mood.advance (dt / 3.0, rng);
+
+        // how rough the sky is (0 calm, 1 storm); a change of Mood fades in over a few seconds
+        static const float moods[] = { 0.0f, 0.4f, 1.0f };
+        const int m = juce::jlimit (0, 3, p.weatherMood);
+        const float target = m < 3 ? moods[m] : juce::jlimit (0.0f, 1.0f, 0.5f + 0.7f * mood.value());
+        if (storm < 0.0f) storm = target;
+        storm += (1.0f - std::exp (-(float) n / (float) (4.0 * sr))) * (target - storm);
+    }
+
+    /** The modulated parameters: \p out = \p in with density, spray, size (every lane) and tone moved. */
+    void apply (const Params& in, Params& out)
+    {
+        out = in;
+        const float a = juce::jlimit (0.0f, 1.0f, in.weatherAmt);
+        const float s = juce::jmax (0.0f, storm);
+        const float slowDepth = 0.5f + 0.5f * s;
+        const float gustDepth = 0.05f + 0.8f * s * s;
+        const float bias = s - 0.4f;       // calm thins out and darkens, a storm thickens and brightens
+        const float g = gust.value();
+
+        const float densityOct = a * (1.3f * slowDepth * slow[0].value() + 1.0f * gustDepth * g + 1.0f * bias);
+        const float sizeOct    = a * (1.0f * slowDepth * slow[1].value() - 0.6f * gustDepth * g - 0.6f * bias);
+        const float sprayAdd   = a * (0.25f * slowDepth * slow[2].value() + 0.25f * gustDepth * g + 0.2f * bias);
+        const float toneOct    = a * (1.2f * slowDepth * slow[3].value() + 0.8f * gustDepth * g + 1.2f * bias);
+
+        for (int L = 0; L < numLanes; ++L)
+        {
+            const auto& src = in.lane (L);
+            auto& dst = out.lane (L);
+            dst.density = juce::jlimit (1.0f, 80.0f, src.density * std::exp2 (densityOct));
+            dst.sizeMs  = juce::jlimit (10.0f, 1500.0f, src.sizeMs * std::exp2 (sizeOct));
+            dst.spray   = juce::jlimit (0.0f, 1.0f, src.spray + sprayAdd);
+        }
+
+        out.toneHz = juce::jlimit (300.0f, 20000.0f, in.toneHz * std::exp2 (toneOct));
+        intensity = juce::jlimit (0.0f, 1.0f, 0.5f + 0.3f * densityOct);
+    }
+
+    /** For the UI: 0 dead calm, 1 full storm (after the last apply). */
+    float getIntensity() const { return intensity; }
+    float getStorminess() const { return juce::jmax (0.0f, storm); }
+
+private:
+    /** Smooth noise: random points in -1..1, joined by a curve without corners. */
+    struct Noise
+    {
+        float a = 0.0f, b = 0.0f;
+        double t = 0.0;
+
+        void init (juce::Random& r) { a = r.nextFloat() * 2.0f - 1.0f; b = r.nextFloat() * 2.0f - 1.0f; t = r.nextDouble(); }
+
+        void advance (double dt, juce::Random& r)
+        {
+            t += dt;
+            while (t >= 1.0) { t -= 1.0; a = b; b = r.nextFloat() * 2.0f - 1.0f; }
+        }
+
+        float value() const
+        {
+            const float x = (float) t;
+            return a + (b - a) * x * x * (3.0f - 2.0f * x);
+        }
+    };
+
+    double sr = 44100.0;
+    juce::Random rng;
+    std::array<Noise, 4> slow;
+    Noise gust, mood;
+    float storm = -1.0f, intensity = 0.5f;
+};
+
+//==============================================================================
 class Engine
 {
 public:
@@ -177,13 +299,65 @@ public:
     std::array<std::atomic<float>, numVis> grainVis;
     /** Automatic scrolling (Scan) of each lane, 0..1. */
     std::array<std::atomic<float>, numLanes> scanVis;
+    /** Morph gain of each lane (1 = as set), for the UI. */
+    std::array<std::atomic<float>, numLanes> morphVis;
+    /** Weather, for the UI: intensity 0..1 (0.5 = neutral), -1 when the weather is off. */
+    std::atomic<float> weatherVis { -1.0f };
 
     Engine()
     {
         for (auto& v : grainVis) v.store (-1.0f);
         for (auto& v : scanVis) v.store (0.0f);
-        for (int i = 0; i <= windowSize; ++i)
-            window[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) windowSize);
+        for (auto& v : morphVis) v.store (1.0f);
+        buildWindows();
+    }
+
+    static constexpr int windowSize = 2048;
+    static constexpr int numShapes = 5;     // table 0 = Hann, 1..4 = the shapes of shapeNames() except Random
+
+    /** Grain window: 0 = Hann, 1 = Swell, 2 = Twin, 3 = Tremolo, 4 = Pluck. windowSize + 1 values. */
+    const float* windowTable (int shape) const { return windows[(size_t) juce::jlimit (0, numShapes - 1, shape)].data(); }
+
+    /** Weight of lane \p lane on the Morph pad: lane 1 top left, 2 top right, 3 bottom left,
+        4 bottom right (y = 1 is the top). The four weights always add up to 1. */
+    static float morphWeight (int lane, float x, float y)
+    {
+        x = juce::jlimit (0.0f, 1.0f, x);
+        y = juce::jlimit (0.0f, 1.0f, y);
+        const float wx = (lane & 1) != 0 ? x : 1.0f - x;
+        const float wy = lane < 2 ? y : 1.0f - y;
+        return wx * wy;
+    }
+
+    /** Morph gain of each lane: an equal-power crossfade among the lanes in \p playable. With the
+        point in the middle every lane plays at 1; on a lane's corner that lane plays at
+        sqrt (lanes playing) and the others are silent. If the point sits on empty lanes only,
+        every gain is 1 (the pad has nothing to blend). morphAmt blends from 1 to these gains. */
+    static std::array<float, numLanes> morphGains (const Params& p, const std::array<bool, numLanes>& playable)
+    {
+        std::array<float, numLanes> gains;
+        gains.fill (1.0f);
+        const float amount = juce::jlimit (0.0f, 1.0f, p.morphAmt);
+
+        float total = 0.0f;
+        int count = 0;
+        for (int L = 0; L < numLanes; ++L)
+            if (playable[(size_t) L])
+            {
+                total += morphWeight (L, p.morphX, p.morphY);
+                ++count;
+            }
+
+        if (amount <= 0.0f || count == 0 || total <= 1e-6f)
+            return gains;
+
+        for (int L = 0; L < numLanes; ++L)
+        {
+            const float g = playable[(size_t) L] ? std::sqrt (morphWeight (L, p.morphX, p.morphY) / total * (float) count) : 1.0f;
+            gains[(size_t) L] = 1.0f + amount * (g - 1.0f);
+        }
+
+        return gains;
     }
 
     void prepare (double sampleRate)
@@ -203,6 +377,7 @@ public:
         reverb.setSampleRate (sr);
         shimL.prepare (sr);
         shimR.prepare (sr);
+        weather.prepare (sr);
         killFade = juce::jmax (32, (int) (0.006 * sr));
         killLeft = -1;
         reset();
@@ -229,7 +404,12 @@ public:
 
     /** Sets the random seed: two engines with the same seed and the same parameters produce the
         same output, sample for sample. Used by the tests; normally the seed is random. */
-    void setRandomSeed (juce::int64 seed) { rng.setSeed (seed); }
+    void setRandomSeed (juce::int64 seed)
+    {
+        rng.setSeed (seed);
+        weather.setSeed (seed + 7919);
+        weather.prepare (sr);
+    }
 
     //==========================================================================
     void noteOn (int note, float velocity, int lengthSamples = -1)
@@ -297,9 +477,18 @@ public:
     /** slots: numSlots pointers, one per lane, possibly nullptr (empty lane). in* may be nullptr
         (instrument). in and out must not overlap. n <= maxBlock. */
     void processSlots (SampleData* const* slots, const float* inL, const float* inR,
-                       float* outL, float* outR, int n, const Params& p, double bpm)
+                       float* outL, float* outR, int n, const Params& params, double bpm)
     {
         jassert (n <= maxBlock);
+
+        // --- weather: with Amount at zero the parameters are used exactly as they are
+        weather.advance (n, params);
+        const bool weatherOn = params.weatherAmt > 0.0f;
+        if (weatherOn)
+            weather.apply (params, weathered);
+        const Params& p = weatherOn ? weathered : params;
+        weatherVis.store (weatherOn ? weather.getIntensity() : -1.0f, std::memory_order_relaxed);
+
         std::fill (mixL.begin(), mixL.begin() + n, 0.0f);
         std::fill (mixR.begin(), mixR.begin() + n, 0.0f);
 
@@ -397,6 +586,7 @@ private:
     {
         bool active = false;
         int slot = 0;
+        const float* win = nullptr;    // window table, chosen at birth
         double pos = 0.0, inc = 1.0;
         float winPhase = 0.0f, winInc = 0.0f;
         float gainL = 0.0f, gainR = 0.0f;
@@ -546,7 +736,68 @@ private:
         g->gainR = amp * std::sin (pan * juce::MathConstants<float>::halfPi);
         g->remaining = grainLen;
         g->delay = offset;
+        g->win = windows[0].data();
         assignGrainFx (*g, p);
+        assignShape (*g, p);
+    }
+
+    /** With probability shapeChance the grain gets the chosen shape (Random: one of the four).
+        At zero no random number is drawn, so the random sequence stays the same as before. */
+    void assignShape (Grain& g, const Params& p)
+    {
+        if (p.shapeChance <= 0.0f || rng.nextFloat() >= p.shapeChance)
+            return;
+
+        const int choice = juce::jlimit (0, numShapes - 1, p.grainShape);   // 4 = Random
+        const int table = choice < numShapes - 1 ? choice + 1 : 1 + rng.nextInt (numShapes - 1);
+        g.win = windows[(size_t) table].data();
+    }
+
+    /** Every window starts and ends at zero (no clicks) and has the Hann's energy, so changing
+        shape does not change the level. */
+    void buildWindows()
+    {
+        const float pi = juce::MathConstants<float>::pi;
+        auto hannAt = [pi] (float x) { const float s = std::sin (pi * x); return s * s; };
+
+        // rises slowly and falls fast (or the other way round): half a Hann on each side
+        auto asym = [pi] (float x, float peak)
+        {
+            if (x < peak) return 0.5f - 0.5f * std::cos (pi * x / peak);
+            return 0.5f + 0.5f * std::cos (pi * (x - peak) / (1.0f - peak));
+        };
+
+        for (int i = 0; i <= windowSize; ++i)
+        {
+            const float x = (float) i / (float) windowSize;
+            const float hann = hannAt (x);
+            const float pluckTail = x < 0.03f ? 0.0f : (1.0f - (x - 0.03f) / 0.97f);
+
+            // the Hann with the same formula as always: saved sets sound identical, bit for bit
+            windows[0][(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) windowSize);
+            windows[1][(size_t) i] = asym (x, 0.85f);                                                    // Swell
+            windows[2][(size_t) i] = hann * (0.3f + 0.7f * hannAt (2.0f * x));                           // Twin
+            windows[3][(size_t) i] = hann * (0.55f + 0.45f * std::cos (juce::MathConstants<float>::twoPi * 6.0f * x)); // Tremolo
+            windows[4][(size_t) i] = x < 0.03f ? asym (x / 0.03f * 0.5f, 0.5f)                          // Pluck
+                                               : pluckTail * pluckTail * pluckTail;
+        }
+
+        windows[1][0] = windows[1][(size_t) windowSize] = 0.0f;
+        windows[4][(size_t) windowSize] = 0.0f;
+
+        auto energy = [] (const std::array<float, windowSize + 1>& w)
+        {
+            double sum = 0.0;
+            for (auto v : w) sum += (double) v * v;
+            return sum;
+        };
+
+        const double reference = energy (windows[0]);
+        for (int s = 1; s < numShapes; ++s)
+        {
+            const float gain = (float) std::sqrt (reference / energy (windows[(size_t) s]));
+            for (auto& v : windows[(size_t) s]) v *= gain;
+        }
     }
 
     void assignGrainFx (Grain& g, const Params& p)
@@ -659,6 +910,16 @@ private:
             releaseStep[L] = 1.0f / juce::jmax (1.0f, gp.releaseMs * 0.001f * (float) sr);
         }
 
+        // Morph: crossfades the lanes' levels. At Amount zero nothing changes (no extra multiply)
+        const bool morphOn = p.morphAmt > 0.0f;
+        const auto morph = morphGains (p, playable);
+        for (size_t L = 0; L < (size_t) numLanes; ++L)
+        {
+            if (morphOn)
+                norm[L] *= morph[L];
+            morphVis[L].store (morph[L], std::memory_order_relaxed);
+        }
+
         if (p.fixedPosition)
             scanPhase.fill (0.0);   // fixed position: grains are born exactly on Position
 
@@ -704,7 +965,7 @@ private:
                     v.untilGrain[L] -= 1.0;
                     if (v.untilGrain[L] <= 0.0)
                     {
-                        if (playable[L])
+                        if (playable[L] && norm[L] > 0.0f)     // a lane silenced by Morph spawns nothing
                             spawnGrains (v, (int) L, i, p, norm[L], interval[L]);
                         v.untilGrain[L] += interval[L] * (0.5 + rng.nextDouble());
                     }
@@ -753,7 +1014,7 @@ private:
             for (; i < n && g.remaining > 0; ++i, --g.remaining)
             {
                 const int wi = (int) g.winPhase;
-                const float w = window[(size_t) juce::jmin (wi, windowSize)];
+                const float w = g.win[juce::jmin (wi, windowSize)];
 
                 const int i1 = (int) g.pos;
                 const float f = (float) (g.pos - (double) i1);
@@ -941,8 +1202,7 @@ private:
     }
 
     //==========================================================================
-    static constexpr int windowSize = 2048;
-    std::array<float, windowSize + 1> window {};
+    std::array<std::array<float, windowSize + 1>, numShapes> windows {};
 
     double sr = 44100.0;
     std::array<Voice, maxVoices> voices;
@@ -969,6 +1229,8 @@ private:
 
     juce::Reverb reverb;
     OctaveUp shimL, shimR;
+    Weather weather;
+    Params weathered;
     float shLpL = 0.0f, shLpR = 0.0f, shHpL = 0.0f, shHpR = 0.0f, lastReverbSize = -1.0f, lastReverbDamp = -1.0f;
 };
 
