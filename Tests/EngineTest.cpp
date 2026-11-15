@@ -295,18 +295,18 @@ int main()
             Params p = cleanParams(); p.voiceSpread = 0;
             const std::initializer_list<double> f { 440.0, 880.0, 659.26, 554.37 };
 
-            Engine e0; e0.prepare (sr); e0.noteOn (60, 1.0f);
+            Engine e0; e0.prepare (sr); e0.setRandomSeed (11); e0.noteOn (60, 1.0f);
             auto one = runTones (e0, slots, p, sr, 4.0, f);
 
             p.grainVoices = 2;
             p.voiceMode = 1;    // Octaves: +12
-            Engine e1; e1.prepare (sr); e1.noteOn (60, 1.0f);
+            Engine e1; e1.prepare (sr); e1.setRandomSeed (11); e1.noteOn (60, 1.0f);
             auto oct = runTones (e1, slots, p, sr, 4.0, f);
             p.voiceMode = 2;    // Fifths: +7
-            Engine e2; e2.prepare (sr); e2.noteOn (60, 1.0f);
+            Engine e2; e2.prepare (sr); e2.setRandomSeed (11); e2.noteOn (60, 1.0f);
             auto fifth = runTones (e2, slots, p, sr, 4.0, f);
             p.voiceMode = 3; p.genScale = 0;    // Chord in major: a third above (+4)
-            Engine e3; e3.prepare (sr); e3.noteOn (60, 1.0f);
+            Engine e3; e3.prepare (sr); e3.setRandomSeed (11); e3.noteOn (60, 1.0f);
             auto third = runTones (e3, slots, p, sr, 4.0, f);
 
             checkTones (one[0] > 0.02 && one[1] < 0.1 * one[0] && one[2] < 0.1 * one[0], "1 voice: only 440 Hz", one, f);
@@ -322,18 +322,18 @@ int main()
             Params p = cleanParams();
             p.lane (1).pitch = 12;          // lane 2: the same A an octave up
             SampleData* two[Engine::numSlots] = { sample.get(), sample.get(), nullptr, nullptr };
-            Engine e; e.prepare (sr); e.noteOn (60, 1.0f);
+            Engine e; e.prepare (sr); e.setRandomSeed (11); e.noteOn (60, 1.0f);
             auto a = runTones (e, two, p, sr, 4.0, f);
             checkTones (a[0] > 0.02 && a[1] > 0.3 * a[0] && a[3] < 0.1 * a[0], "lane 1 at 440, lane 2 (+12 st) at 880", a, f);
 
             p.level = 0;                    // lane 1 at zero level: only lane 2 remains
-            Engine e2; e2.prepare (sr); e2.noteOn (60, 1.0f);
+            Engine e2; e2.prepare (sr); e2.setRandomSeed (11); e2.noteOn (60, 1.0f);
             auto b = runTones (e2, two, p, sr, 4.0, f);
             checkTones (b[1] > 0.02 && b[0] < 0.05 * b[1], "lane 1 Level at zero", b, f);
 
             Params q = cleanParams(); q.lane (2).pitch = 7;     // only lane 3 filled, with its own controls
             SampleData* third[Engine::numSlots] = { nullptr, nullptr, sample.get(), nullptr };
-            Engine e3; e3.prepare (sr); e3.noteOn (60, 1.0f);
+            Engine e3; e3.prepare (sr); e3.setRandomSeed (11); e3.noteOn (60, 1.0f);
             auto c = runTones (e3, third, q, sr, 4.0, f);
             checkTones (c[2] > 0.02 && c[0] < 0.1 * c[2], "only lane 3 filled, Pitch +7 -> 659 Hz", c, f);
         }
@@ -342,7 +342,7 @@ int main()
             Params p = cleanParams();
             p.releaseMs = 30; p.lane (1).releaseMs = 6000;
             SampleData* two[Engine::numSlots] = { sample.get(), high.get(), nullptr, nullptr };
-            Engine e; e.prepare (sr); e.noteOn (60, 1.0f);
+            Engine e; e.prepare (sr); e.setRandomSeed (11); e.noteOn (60, 1.0f);
             auto held = runTones (e, two, p, sr, 2.0, f);
             e.noteOff (60);
             runTones (e, two, p, sr, 0.5, f);
@@ -350,10 +350,18 @@ int main()
             checkTones (held[0] > 0.02 && held[1] > 0.02 && tail[0] < 0.02 * held[0] && tail[1] > 0.3 * held[1],
                         "per-lane Release", tail, f);
 
+            // Attack: the same engine twice with the same seed (attack draws no random numbers, so the
+            // grains are identical), lane 2 fast the first time and slow the second. Lane 1 barely
+            // changes (only through the shared output stage).
+            p.lane (1).attackMs = 5;
+            Engine fast; fast.prepare (sr); fast.setRandomSeed (5); fast.noteOn (60, 1.0f);
+            auto quick = runTones (fast, two, p, sr, 0.5, f);
             p.lane (1).attackMs = 3000;     // slow Attack on lane 2 only
-            Engine e2; e2.prepare (sr); e2.noteOn (60, 1.0f);
-            auto start = runTones (e2, two, p, sr, 0.3, f);
-            checkTones (start[0] > 0.02 && start[1] < 0.25 * start[0] * held[1] / held[0], "per-lane Attack", start, f);
+            Engine slow; slow.prepare (sr); slow.setRandomSeed (5); slow.noteOn (60, 1.0f);
+            auto start = runTones (slow, two, p, sr, 0.5, f);
+            std::printf ("      (lane 2 at 880 Hz: fast attack %.4f, slow attack %.4f)\n", quick[1], start[1]);
+            checkTones (quick[1] > 0.02 && start[1] < 0.25 * quick[1] && std::abs (start[0] - quick[0]) < 0.05 * quick[0],
+                        "per-lane Attack", start, f);
         }
         {   // 13. per-lane Scan; each lane reads only its own sample
             Params p; p.scan = 0; p.lane (1).scan = 1.0f; p.lane (3).scan = -0.5f;
