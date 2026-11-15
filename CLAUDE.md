@@ -26,7 +26,7 @@ Ambient granular plugin for Ableton Live (macOS), inspired by GrainBrick.
 
 ## Hard rules
 1. **Audio thread**: no allocation, no blocking locks, no I/O. Sample hand-off uses only `SpinLock::ScopedTryLockType` (if the lock is busy, retry on the next block). Buffers are sized in `prepare` (`Engine::maxBlock = 2048`).
-2. **Parameter compatibility**: IDs, order, ranges and defaults of existing parameters never change (it would break saved Live sets). New features are appended **at the end** of `createLayout`, with a version hint higher than the original parameters' (currently `ParameterID { id, 2 }`; JUCE requires this for Audio Units). See `docs/parametri.md`.
+2. **Parameter compatibility**: IDs, order, ranges and defaults of existing parameters never change (it would break saved Live sets). New features are appended **at the end** of `createLayout`, with a version hint higher than the existing parameters' (currently up to `ParameterID { id, 3 }`; JUCE requires this for Audio Units). See `docs/parametri.md`.
 3. **Saved state**: `getStateInformation` / `setStateInformation` must keep loading old sets (missing parameters fall back to defaults).
 4. **Tests**: they must pass before every change. A new feature comes with a test (engine → `EngineTest.cpp`, parameters/state → `PluginTest.cpp`).
 5. `Engine.h` stays host-independent. Current limits: 12 notes, 4 lanes, 8 grain voices, 512 grains (160 with one lane and one voice, as in version 1).

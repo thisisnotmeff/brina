@@ -218,10 +218,168 @@ void WaveformView::mouseUp (const juce::MouseEvent&)
 }
 
 //==============================================================================
+MorphPad::MorphPad (BrinaProcessor& p)
+    : proc (p),
+      xAttachment (*p.apvts.getParameter ("morphX"), [this] (float v) { x = v; repaint(); }, nullptr),
+      yAttachment (*p.apvts.getParameter ("morphY"), [this] (float v) { y = v; repaint(); }, nullptr)
+{
+    gain.fill (1.0f);
+    xAttachment.sendInitialUpdate();
+    yAttachment.sendInitialUpdate();
+}
+
+juce::Rectangle<float> MorphPad::padArea() const
+{
+    return getLocalBounds().toFloat().reduced (1.0f);
+}
+
+void MorphPad::refresh()
+{
+    for (int s = 0; s < BrinaProcessor::numSlots; ++s)
+    {
+        gain[(size_t) s] = proc.engine.morphVis[(size_t) s].load (std::memory_order_relaxed);
+        auto sample = proc.getSample (s);
+        filled[(size_t) s] = sample != nullptr && sample->length.load() > 0;
+    }
+
+    amount = proc.apvts.getRawParameterValue ("morphAmt")->load();
+    repaint();
+}
+
+void MorphPad::paint (juce::Graphics& g)
+{
+    const auto area = padArea();
+    const bool on = amount > 0.0f;
+
+    g.setColour (ui::background);
+    g.fillRoundedRectangle (area, 4.0f);
+    g.setColour (ui::outline);
+    g.drawRoundedRectangle (area, 4.0f, 1.0f);
+    g.drawLine (area.getCentreX(), area.getY() + 4, area.getCentreX(), area.getBottom() - 4, 0.5f);
+    g.drawLine (area.getX() + 4, area.getCentreY(), area.getRight() - 4, area.getCentreY(), 0.5f);
+
+    // corners: 1 top left, 2 top right, 3 bottom left, 4 bottom right
+    const float r = 9.0f;
+    const juce::Point<float> corners[] = { area.getTopLeft() + juce::Point<float> (r + 3, r + 3),
+                                           area.getTopRight() + juce::Point<float> (-r - 3, r + 3),
+                                           area.getBottomLeft() + juce::Point<float> (r + 3, -r - 3),
+                                           area.getBottomRight() + juce::Point<float> (-r - 3, -r - 3) };
+
+    for (int s = 0; s < BrinaProcessor::numSlots; ++s)
+    {
+        const auto c = corners[s];
+        const auto colour = ui::laneColour (s);
+        // a lane at gain 1 glows softly, louder lanes more, silenced ones not at all
+        const float glow = filled[(size_t) s] ? juce::jlimit (0.0f, 1.0f, 0.15f + 0.4f * gain[(size_t) s]) : 0.0f;
+        g.setColour (colour.withAlpha (glow * 0.8f));
+        g.fillEllipse (c.x - r, c.y - r, 2 * r, 2 * r);
+        g.setColour (filled[(size_t) s] ? ui::background : ui::dim.withAlpha (0.5f));
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (juce::String (s + 1), juce::Rectangle<float> (c.x - r, c.y - r, 2 * r, 2 * r), juce::Justification::centred);
+    }
+
+    const float px = area.getX() + x * area.getWidth();
+    const float py = area.getBottom() - y * area.getHeight();
+    g.setColour ((on ? ui::accent : ui::dim).withAlpha (0.25f));
+    g.fillEllipse (px - 10, py - 10, 20, 20);
+    g.setColour (on ? ui::accent : ui::dim);
+    g.fillEllipse (px - 5, py - 5, 10, 10);
+}
+
+void MorphPad::setFromMouse (const juce::MouseEvent& e)
+{
+    const auto area = padArea();
+    xAttachment.setValueAsPartOfGesture (juce::jlimit (0.0f, 1.0f, (e.position.x - area.getX()) / area.getWidth()));
+    yAttachment.setValueAsPartOfGesture (juce::jlimit (0.0f, 1.0f, (area.getBottom() - e.position.y) / area.getHeight()));
+}
+
+void MorphPad::mouseDown (const juce::MouseEvent& e)
+{
+    xAttachment.beginGesture();
+    yAttachment.beginGesture();
+    setFromMouse (e);
+}
+
+void MorphPad::mouseDrag (const juce::MouseEvent& e) { setFromMouse (e); }
+
+void MorphPad::mouseUp (const juce::MouseEvent&)
+{
+    xAttachment.endGesture();
+    yAttachment.endGesture();
+}
+
+void MorphPad::mouseDoubleClick (const juce::MouseEvent&)
+{
+    xAttachment.setValueAsCompleteGesture (0.5f);
+    yAttachment.setValueAsCompleteGesture (0.5f);
+}
+
+//==============================================================================
+void WeatherMeter::refresh()
+{
+    const float v = proc.engine.weatherVis.load (std::memory_order_relaxed);
+
+    if (v < 0.0f)
+        history.clear();
+    else
+    {
+        if (history.size() >= 90)
+            history.erase (history.begin());
+        history.push_back (v);
+    }
+
+    if (v != intensity || v >= 0.0f)
+    {
+        intensity = v;
+        repaint();
+    }
+}
+
+void WeatherMeter::paint (juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat();
+    auto labels = area.removeFromBottom (12);
+    auto bar = area.reduced (0, 4);
+    const bool on = intensity >= 0.0f;
+
+    juce::ColourGradient sky (juce::Colour (0xff2c4a5c), bar.getX(), 0, juce::Colour (0xff5a3a52), bar.getRight(), 0, false);
+    sky.addColour (0.5, juce::Colour (0xff3b4a58));
+    g.setGradientFill (sky);
+    g.setOpacity (on ? 1.0f : 0.35f);
+    g.fillRoundedRectangle (bar, 3.0f);
+    g.setOpacity (1.0f);
+
+    // the trail of the last three seconds, then the marker for now
+    for (size_t i = 0; i < history.size(); ++i)
+    {
+        const float alpha = 0.04f + 0.25f * (float) i / (float) juce::jmax<size_t> (1, history.size());
+        const float hx = bar.getX() + history[i] * bar.getWidth();
+        g.setColour (ui::accent.withAlpha (alpha));
+        g.fillRect (hx - 1.0f, bar.getY() + 2, 2.0f, bar.getHeight() - 4);
+    }
+
+    if (on)
+    {
+        const float mx = bar.getX() + intensity * bar.getWidth();
+        g.setColour (ui::accent);
+        g.fillRoundedRectangle (mx - 2.0f, bar.getY(), 4.0f, bar.getHeight(), 2.0f);
+    }
+
+    g.setColour (ui::dim);
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("calm", labels, juce::Justification::centredLeft);
+    if (! on)
+        g.drawText ("off", labels, juce::Justification::centred);
+    g.drawText ("storm", labels, juce::Justification::centredRight);
+}
+
+//==============================================================================
 BrinaEditor::BrinaEditor (BrinaProcessor& p)
-    : AudioProcessorEditor (p), proc (p)
+    : AudioProcessorEditor (p), proc (p), morphPad (p), weatherMeter (p)
 {
     setLookAndFeel (&lookAndFeel);
+    addAndMakeVisible (morphPad);
+    addAndMakeVisible (weatherMeter);
 
     // --- trasporto: Play/Stop (le code sfumano) e Kill (silenzio immediato)
     playButton.setClickingTogglesState (true);
@@ -302,10 +460,13 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
              { "drive", "Drive" }, { "wow", "Wow" }, { "tone", "Tone" },
              { "delayTime", "Time" }, { "delayFeedback", "Feedback" }, { "delayMix", "Mix" },
              { "reverbSize", "Size" }, { "reverbDamp", "Damp" }, { "shimmer", "Shimmer" }, { "reverbMix", "Mix" },
-             { "dry", "Dry In" }, { "volume", "Volume" } })
+             { "dry", "Dry In" }, { "volume", "Volume" },
+             { "shapeChance", "Chance" }, { "morphAmt", "Amount" }, { "weatherAmt", "Amount" }, { "weatherRate", "Rate" } })
         addKnob (id, title);
 
     addChoice ("voiceMode", "Intervals");
+    addChoice ("grainShape", "Shape");
+    addChoice ("weatherMood", "Mood");
     addChoice ("genRate", "Rate");
     addChoice ("genRoot", "Root");
     addChoice ("genScale", "Scale");
@@ -322,11 +483,23 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
         knob (id).slider.setTooltip ("Quanti grani ricevono l'effetto, in tutte le corsie: 0 nessuno, 1 tutti. "
                                      "Ogni grano puo' averne piu' di uno");
 
+    choice ("grainShape").box.setTooltip ("Grain shape: Swell rises slowly and falls fast, Twin has two humps, "
+                                          "Tremolo pulses, Pluck starts sharp and fades, Random picks one per grain");
+    knob ("shapeChance").slider.setTooltip ("How many grains get the chosen shape: 0 none (the usual soft window), 1 all");
+    knob ("morphAmt").slider.setTooltip ("How much the pad blends the lanes: 0 lanes play as set, 1 fully the pad's mix");
+    morphPad.setTooltip ("Morph: drag the point towards lanes 1-4 on the corners. Double click: back to the middle");
+    knob ("weatherAmt").slider.setTooltip ("How much the weather moves Density, Spray, Size (every lane) and Tone. "
+                                           "The knobs stay where they are: the weather works on top of them");
+    knob ("weatherRate").slider.setTooltip ("Length of one slow weather cycle; gusts are six times faster");
+    choice ("weatherMood").box.setTooltip ("Calm thins out and darkens, Breeze moves gently, Storm thickens and brightens "
+                                           "with gusts, Changing drifts from calm to storm on its own");
+    weatherMeter.setTooltip ("The sky right now: from calm (left) to stormy (right)");
+
     knob ("dry").slider.setVisible (BrinaProcessor::hasAudioInput());
     knob ("dry").label.setVisible (BrinaProcessor::hasAudioInput());
 
     setResizable (true, true);
-    setResizeLimits (1060, 660, 1900, 1300);
+    setResizeLimits (minWidth, minHeight, 1900, 1400);
     setSize (defaultWidth, defaultHeight);
     startTimerHz (30);
 }
@@ -453,6 +626,8 @@ void BrinaEditor::resized()
     area.removeFromBottom (gap);
     auto middleRow = area.removeFromBottom (rowHeight);
     area.removeFromBottom (gap);
+    auto textureRow = area.removeFromBottom (rowHeight);
+    area.removeFromBottom (gap);
 
     auto content = [] (juce::Rectangle<int> section) { return section.withTrimmedTop (22).reduced (6, 4); };
 
@@ -492,6 +667,45 @@ void BrinaEditor::resized()
                 dividers.push_back ({ inner.getX() - 1, inner.getY() + 8, 1, inner.getHeight() - 16 });
 
             placeKnob (*lane->knobs[(size_t) k], inner.removeFromLeft (cell));
+        }
+    }
+
+    // --- Shape + Morph + Weather, shared by all lanes
+    {
+        auto row = textureRow;
+        const float unit = (float) (row.getWidth() - 2 * gap) / 13.0f;
+
+        auto shape = row.removeFromLeft (juce::roundToInt (unit * 3.5f));
+        row.removeFromLeft (gap);
+        sections.push_back ({ "SHAPE  -  grain envelope", shape });
+        {
+            auto inner = content (shape);
+            placeKnob (knob ("shapeChance"), inner.removeFromRight (inner.getWidth() / 3));
+            placeChoice (choice ("grainShape"), inner.reduced (8, 0));
+        }
+
+        auto morph = row.removeFromLeft (juce::roundToInt (unit * 3.5f));
+        row.removeFromLeft (gap);
+        sections.push_back ({ "MORPH  -  blend the lanes", morph });
+        {
+            auto inner = content (morph);
+            placeKnob (knob ("morphAmt"), inner.removeFromRight (inner.getWidth() / 3));
+            const int side = juce::jmin (inner.getWidth() - 8, inner.getHeight() + 2);
+            morphPad.setBounds (inner.withSizeKeepingCentre (side, side));
+        }
+
+        sections.push_back ({ "WEATHER  -  slow drifting skies", row });
+        {
+            auto inner = content (row);
+            const int cell = inner.getWidth() / 5;
+            placeKnob (knob ("weatherAmt"), inner.removeFromLeft (cell));
+            placeKnob (knob ("weatherRate"), inner.removeFromLeft (cell));
+            auto right = inner.reduced (8, 0);
+            auto& mood = choice ("weatherMood");
+            mood.label.setBounds (right.removeFromTop (14));
+            mood.box.setBounds (right.removeFromTop (26).withTrimmedTop (2));
+            right.removeFromTop (8);
+            weatherMeter.setBounds (right.removeFromTop (34));
         }
     }
 
@@ -585,6 +799,17 @@ void BrinaEditor::resized()
 //==============================================================================
 void BrinaEditor::timerCallback()
 {
+    morphPad.refresh();
+    weatherMeter.refresh();
+
+    {
+        auto value = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
+        choice ("grainShape").box.setEnabled (value ("shapeChance") > 0.0f);
+        const bool weatherOn = value ("weatherAmt") > 0.0f;
+        knob ("weatherRate").slider.setEnabled (weatherOn);
+        choice ("weatherMood").box.setEnabled (weatherOn);
+    }
+
     const bool rec = proc.isRecording();
     const bool fixed = positionButton.getToggleState();
     bool repaintLanes = false;

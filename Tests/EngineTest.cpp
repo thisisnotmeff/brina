@@ -455,6 +455,206 @@ int main()
             check (c.finite && c.rms > 0.01 && c.peak < 1.5 && c.rms != a.rms, "Grain Drive", c);
             check (d.finite && d.rms > 0.01 && d.peak < 1.5, "Grain Filter, risonanza al massimo", d);
         }
+        // ------------------------------------------------------------------ grain shapes
+        {   // 20. every shape starts and ends at zero and has the Hann's energy
+            Engine e;
+            const float* hann = e.windowTable (0);
+            double ref = 0;
+            for (int i = 0; i <= Engine::windowSize; ++i) ref += (double) hann[i] * hann[i];
+
+            bool ok = true;
+            juce::String detail;
+            for (int s = 1; s < Engine::numShapes; ++s)
+            {
+                const float* w = e.windowTable (s);
+                double energy = 0, peak = 0;
+                bool finite = true;
+                for (int i = 0; i <= Engine::windowSize; ++i)
+                {
+                    finite = finite && std::isfinite (w[i]) && w[i] >= 0.0f;
+                    energy += (double) w[i] * w[i];
+                    peak = std::max (peak, (double) w[i]);
+                }
+                // the first and last samples stay tiny: the grain fades in and out without a click
+                const bool edges = std::abs (w[0]) < 1e-6f && std::abs (w[Engine::windowSize]) < 1e-6f
+                                   && std::abs (w[1]) < 0.01f && std::abs (w[Engine::windowSize - 1]) < 0.01f;
+                const bool same = std::abs (energy / ref - 1.0) < 1e-3;
+                if (! (finite && edges && same && peak < 2.0)) { ok = false; detail << " " << s; }
+            }
+            Stats none;
+            check (ok, ("shapes: zero at the edges, Hann energy" + detail).toRawUTF8(), none);
+        }
+        {   // 21. at zero chance the shape does not matter: identical output, sample for sample
+            Params p;
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (91);
+            auto a = run (plain, sample.get(), p, sr, 8.0, 512);
+            p.grainShape = 3;
+            Engine same; same.prepare (sr); same.setRandomSeed (91);
+            auto b = run (same, sample.get(), p, sr, 8.0, 512);
+            check (a.rms == b.rms && a.peak == b.peak && a.zeroCrossHz == b.zeroCrossHz, "Shape Chance at 0: sound unchanged", b);
+        }
+        {   // 22. each shape on every grain: it plays, changes the sound, the level stays close
+            Params p = cleanParams();
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (5); plain.noteOn (60, 1.0f);
+            auto a = run (plain, sample.get(), p, sr, 4.0, 512);
+
+            for (int shape = 0; shape < (int) shapeNames().size(); ++shape)
+            {
+                Params q = p; q.shapeChance = 1.0f; q.grainShape = shape;
+                Engine e; e.prepare (sr); e.setRandomSeed (5); e.noteOn (60, 1.0f);
+                auto b = run (e, sample.get(), q, sr, 4.0, 512);
+                const juce::String name = "shape " + shapeNames()[shape] + ": plays, similar level";
+                check (b.finite && b.peak < 1.5 && b.rms != a.rms && b.rms > 0.6 * a.rms && b.rms < 1.6 * a.rms
+                           && std::abs (b.zeroCrossHz - 440.0) < 30.0,
+                       name.toRawUTF8(), b);
+            }
+        }
+
+        // ------------------------------------------------------------------ morph between lanes
+        {   // 23. Morph Amount at 0: the pad does not matter, identical output, sample for sample
+            SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), nullptr };
+            Params p; p.grainVoices = 3;
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (13);
+            auto a = runSlots (plain, slots, p, sr, 8.0, 512);
+            p.morphX = 0.9f; p.morphY = 0.1f;
+            Engine same; same.prepare (sr); same.setRandomSeed (13);
+            auto b = runSlots (same, slots, p, sr, 8.0, 512);
+            check (a.rms == b.rms && a.peak == b.peak && a.zeroCrossHz == b.zeroCrossHz, "Morph Amount at 0: sound unchanged", b);
+        }
+        {   // 24. on lane 2's corner only lane 2 is heard; in the middle both
+            const std::initializer_list<double> f { 440.0, 880.0, 659.26, 1760.0 };
+            SampleData* two[Engine::numSlots] = { sample.get(), high.get(), nullptr, nullptr };
+            Params p = cleanParams(); p.morphAmt = 1; p.morphX = 1; p.morphY = 1;
+            Engine e; e.prepare (sr); e.setRandomSeed (17); e.noteOn (60, 1.0f);
+            auto a = runTones (e, two, p, sr, 4.0, f);
+            checkTones (a[1] > 0.02 && a[0] < 0.05 * a[1], "Morph on lane 2's corner: only 880 Hz", a, f);
+
+            p.morphX = 0.5f; p.morphY = 0.5f;
+            Engine e2; e2.prepare (sr); e2.setRandomSeed (17); e2.noteOn (60, 1.0f);
+            auto b = runTones (e2, two, p, sr, 4.0, f);
+            checkTones (b[0] > 0.02 && b[1] > 0.02, "Morph in the middle: both lanes", b, f);
+
+            // halfway between lane 1 and lane 2 (top edge, Amount 0.5): both, lane 2 louder
+            p.morphX = 0.85f; p.morphY = 1; p.morphAmt = 0.5f;
+            Engine e3; e3.prepare (sr); e3.setRandomSeed (17); e3.noteOn (60, 1.0f);
+            auto c = runTones (e3, two, p, sr, 4.0, f);
+            Engine e4; e4.prepare (sr); e4.setRandomSeed (17); e4.noteOn (60, 1.0f);
+            Params off = cleanParams();
+            auto d = runTones (e4, two, off, sr, 4.0, f);
+            checkTones (c[0] > 0.01 && c[1] / c[0] > 1.3 * d[1] / d[0], "Morph Amount 0.5 towards lane 2", c, f);
+        }
+        {   // 25. the pad's weights and gains: exact corners, weights add up to 1, constant power
+            bool ok = Engine::morphWeight (0, 0, 1) == 1 && Engine::morphWeight (1, 1, 1) == 1
+                      && Engine::morphWeight (2, 0, 0) == 1 && Engine::morphWeight (3, 1, 0) == 1;
+            const std::array<bool, numLanes> all { true, true, true, true }, two { true, false, true, false },
+                                             none { false, false, false, false };
+            for (float x = 0; x <= 1.0f; x += 0.125f)
+                for (float y = 0; y <= 1.0f; y += 0.125f)
+                {
+                    float sum = 0;
+                    for (int s = 0; s < numLanes; ++s) sum += Engine::morphWeight (s, x, y);
+                    ok = ok && std::abs (sum - 1.0f) < 1e-5f;
+
+                    Params p; p.morphAmt = 1; p.morphX = x; p.morphY = y;
+                    float power = 0;
+                    for (auto g : Engine::morphGains (p, all)) power += g * g;
+                    ok = ok && std::abs (power - 4.0f) < 1e-3f;
+
+                    auto g2 = Engine::morphGains (p, two);      // only lanes 1 and 3 filled
+                    ok = ok && (x >= 1.0f || std::abs (g2[0] * g2[0] + g2[2] * g2[2] - 2.0f) < 1e-3f);
+                    for (auto g : Engine::morphGains (p, none)) ok = ok && g == 1.0f;
+                }
+
+            Params centre; centre.morphAmt = 1;
+            for (auto g : Engine::morphGains (centre, all)) ok = ok && std::abs (g - 1.0f) < 1e-6f;
+
+            // on the corner of an empty lane (lane 2, top right) with lanes 1 and 3 filled: nothing to blend
+            Params emptyCorner; emptyCorner.morphAmt = 1; emptyCorner.morphX = 1; emptyCorner.morphY = 1;
+            for (auto g : Engine::morphGains (emptyCorner, two)) ok = ok && g == 1.0f;
+
+            Stats st;
+            check (ok, "Morph: corners, weights, constant power", st);
+        }
+
+        // ------------------------------------------------------------------ weather
+        {   // 26. Weather Amount at 0: the weather does not matter, identical output, sample for sample
+            Params p;
+            Engine plain; plain.prepare (sr); plain.setRandomSeed (29);
+            auto a = run (plain, sample.get(), p, sr, 8.0, 512);
+            p.weatherMood = 2; p.weatherRate = 30;
+            Engine same; same.prepare (sr); same.setRandomSeed (29);
+            auto b = run (same, sample.get(), p, sr, 8.0, 512);
+            check (a.rms == b.rms && a.peak == b.peak && a.zeroCrossHz == b.zeroCrossHz && same.weatherVis.load() < 0.0f,
+                   "Weather Amount at 0: sound unchanged", b);
+        }
+        if (sr == 44100.0)
+        {   // 27. two hours of weather for every Mood: values stay inside the parameter ranges, even
+            //     starting from the extremes, with no jumps; a storm moves more than calm and is denser
+            struct Span { float lo = 1e9f, hi = -1e9f; double sum = 0; long n = 0;
+                          void add (float v) { lo = std::min (lo, v); hi = std::max (hi, v); sum += v; ++n; }
+                          double mean() const { return sum / (double) n; } };
+            bool inRange = true, smooth = true, lanesAgree = true;
+            Span density[4];
+
+            for (int mood = 0; mood < 4; ++mood)
+            {
+                for (int extreme = 0; extreme < 3; ++extreme)
+                {
+                    Params p; p.weatherAmt = 1; p.weatherMood = mood; p.weatherRate = 30;
+                    for (int L = 0; L < numLanes; ++L)
+                    {
+                        auto& g = p.lane (L);
+                        if (extreme == 1) { g.density = 80; g.sizeMs = 10; g.spray = 1; }
+                        if (extreme == 2) { g.density = 1; g.sizeMs = 1500; g.spray = 0; }
+                    }
+                    if (extreme == 1) p.toneHz = 20000;
+                    if (extreme == 2) p.toneHz = 300;
+
+                    Weather w; w.setSeed (100 + mood); w.prepare (sr);
+                    Params q, last;
+                    bool first = true;
+                    for (long done = 0; done < (long) (sr * 7200.0); done += 512)
+                    {
+                        w.advance (512, p);
+                        w.apply (p, q);
+                        for (int L = 0; L < numLanes; ++L)
+                        {
+                            const auto& g = q.lane (L);
+                            inRange = inRange && g.density >= 1 && g.density <= 80 && g.sizeMs >= 10 && g.sizeMs <= 1500
+                                      && g.spray >= 0 && g.spray <= 1 && std::isfinite (g.density) && std::isfinite (g.sizeMs);
+                            lanesAgree = lanesAgree && g.density == q.density;
+                        }
+                        inRange = inRange && q.toneHz >= 300 && q.toneHz <= 20000;
+                        // no jumps: within 12 ms the density changes by a few percent at most
+                        if (! first)
+                            smooth = smooth && std::abs (std::log2 (q.density / last.density)) < 0.05f;
+                        if (extreme == 0) density[mood].add (q.density);
+                        last = q; first = false;
+                    }
+                }
+            }
+
+            Stats none;
+            std::printf ("      (mean density: calm %.1f, breeze %.1f, storm %.1f, changing %.1f gr/s; "
+                         "range calm %.1f-%.1f, storm %.1f-%.1f)\n",
+                         density[0].mean(), density[1].mean(), density[2].mean(), density[3].mean(),
+                         density[0].lo, density[0].hi, density[2].lo, density[2].hi);
+            check (inRange && lanesAgree, "Weather: values always in range, same sky for every lane", none);
+            check (smooth, "Weather: no sudden jumps", none);
+            check (density[2].mean() > 1.5 * density[0].mean()
+                       && density[2].hi / density[2].lo > density[0].hi / density[0].lo
+                       && density[0].hi / density[0].lo > 1.5,
+                   "Weather: a storm is denser and rougher than calm", none);
+        }
+        {   // 28. full storm in the real engine with four lanes, one minute: plays, no blow-up
+            SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), high.get() };
+            Engine e; e.prepare (sr); Params p;
+            p.weatherAmt = 1; p.weatherMood = 2; p.weatherRate = 30; p.genRate = 0; p.genProb = 1;
+            auto s = runSlots (e, slots, p, sr, 60.0, 512);
+            const float vis = e.weatherVis.load();
+            check (s.finite && s.rms > 0.005 && s.peak <= 1.76 && vis >= 0.0f && vis <= 1.0f, "Weather in a storm, 60 s", s);
+        }
+
         {   // 19. everything at maximum with eight voices, four lanes and every effect: no blow-up
             Engine e; e.prepare (sr); Params p;
             p.density = 80; p.sizeMs = 1500; p.octaves = 1; p.drive = 1; p.wow = 1; p.delayFeedback = 0.95f;
@@ -463,6 +663,8 @@ int main()
             p.grainVoices = 8; p.voiceSpread = 1; p.voiceMode = 3;
             for (int lane = 1; lane < numLanes; ++lane) p.lane (lane) = p.lane (0);   // every lane at maximum
             p.gfxFilterChance = p.gfxCrushChance = p.gfxDriveChance = 1; p.gfxFilterRes = 1; p.gfxCrush = 1; p.gfxDrive = 1;
+            p.shapeChance = 1; p.grainShape = 4; p.morphAmt = 1; p.morphX = 0.1f; p.morphY = 0.9f;   // lane 1 near +6 dB
+            p.weatherAmt = 1; p.weatherMood = 2; p.weatherRate = 30;
             SampleData* slots[Engine::numSlots] = { sample.get(), high.get(), sample.get(), high.get() };
             for (int n = 48; n < 60; ++n) e.noteOn (n, 1.0f);
 

@@ -59,6 +59,50 @@ private:
 };
 
 //==============================================================================
+/** The Morph XY pad: lanes 1-4 on the corners; the point crossfades their levels. Each corner
+    glows with its lane's current Morph gain. Double click: back to the middle. */
+class MorphPad : public juce::Component,
+                 public juce::SettableTooltipClient
+{
+public:
+    explicit MorphPad (BrinaProcessor&);
+
+    void refresh();     // called by the editor's timer
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+private:
+    juce::Rectangle<float> padArea() const;
+    void setFromMouse (const juce::MouseEvent&);
+
+    BrinaProcessor& proc;
+    juce::ParameterAttachment xAttachment, yAttachment;
+    float x = 0.5f, y = 0.5f, amount = 0.0f;
+    std::array<float, BrinaProcessor::numSlots> gain {};
+    std::array<bool, BrinaProcessor::numSlots> filled {};
+};
+
+//==============================================================================
+/** The Weather sky: a strip from calm to storm with a marker where it is now, and a short trail. */
+class WeatherMeter : public juce::Component,
+                     public juce::SettableTooltipClient
+{
+public:
+    explicit WeatherMeter (BrinaProcessor& p) : proc (p) { history.reserve (90); }
+
+    void refresh();     // called by the editor's timer
+    void paint (juce::Graphics&) override;
+
+private:
+    BrinaProcessor& proc;
+    float intensity = -1.0f;
+    std::vector<float> history;      // the last values, for the trail
+};
+
+//==============================================================================
 class BrinaEditor : public juce::AudioProcessorEditor,
                     public juce::FileDragAndDropTarget,
                     private juce::Timer
@@ -76,7 +120,8 @@ public:
     void fileDragExit (const juce::StringArray&) override                { setDragLane (-1); }
     void filesDropped (const juce::StringArray&, int x, int y) override;
 
-    static constexpr int defaultWidth = 1200, defaultHeight = 760;
+    static constexpr int defaultWidth = 1200, defaultHeight = 876;
+    static constexpr int minWidth = 1060, minHeight = 776;
 
 private:
     struct Knob
@@ -135,6 +180,8 @@ private:
     juce::ToggleButton driftButton { "On" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> driftAttachment, playAttachment, positionAttachment;
     juce::Label statusLabel;
+    MorphPad morphPad;
+    WeatherMeter weatherMeter;
     juce::TooltipWindow tooltips { this, 600 };
 
     std::vector<Section> sections;
