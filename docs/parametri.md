@@ -1,7 +1,8 @@
 # Brina parameters (untouchable: ID, order, range, default)
 
 Source: `BrinaProcessor::createLayout()` in `Source/PluginProcessor.cpp`. Parameter version
-(`ParameterID` version hint): 1 for the 35 original parameters, 2 for everything added after them.
+(`ParameterID` version hint): 1 for the 35 original parameters, 2 for multigrain, per-grain
+effects and lanes, 3 for grain shape, Morph and Weather.
 "skew" = non-linear range, with the given centre value.
 
 | ID | Name | Type | Range | Default | Section |
@@ -76,6 +77,25 @@ Each lane block repeats the twelve grain controls of lane 1 in the same order (`
 With the defaults (one voice, no per-grain effect, lanes 2-4 empty) the engine output is
 identical, sample for sample, to version 1. When an older state is loaded, parameters it does
 not contain are reset to their defaults.
+
+## Version 3: grain shape, Morph, Weather
+
+Appended after `level4`, with version hint 3.
+
+| ID | Name | Type | Range | Default | Section |
+|---|---|---|---|---|---|
+| grainShape | Grain Shape | choice | Swell, Twin, Tremolo, Pluck, Random | 0 (Swell) | Shape |
+| shapeChance | Shape Chance | float | 0–1 | 0 | Shape |
+| morphX | Morph X | float | 0–1 | 0.5 | Morph |
+| morphY | Morph Y | float | 0–1 | 0.5 | Morph |
+| morphAmt | Morph Amount | float | 0–1 | 0 | Morph |
+| weatherAmt | Weather Amount | float | 0–1 | 0 | Weather |
+| weatherRate | Weather Rate | float (s) | 30–1200, skew centre 180 | 180 | Weather |
+| weatherMood | Weather Mood | choice | Calm, Breeze, Storm, Changing | 1 (Breeze) | Weather |
+
+Total: 93 parameters. With `shapeChance`, `morphAmt` and `weatherAmt` at 0 (the defaults) the
+engine output is identical, sample for sample, to version 2: no extra random number is drawn and
+the Weather has its own random generator.
 
 ## Saved state
 

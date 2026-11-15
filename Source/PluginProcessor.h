@@ -95,7 +95,9 @@ private:
                            *reverbSize, *reverbDamp, *shimmer, *reverbMix, *dry, *volume,
                            *play, *kill, *posMode,
                            *voices, *voiceSpread, *voiceMode,
-                           *gfxFilter, *gfxFilterFreq, *gfxFilterRes, *gfxCrush, *gfxCrushAmt, *gfxDrive, *gfxDriveAmt;
+                           *gfxFilter, *gfxFilterFreq, *gfxFilterRes, *gfxCrush, *gfxCrushAmt, *gfxDrive, *gfxDriveAmt,
+                           *grainShape, *shapeChance, *morphX, *morphY, *morphAmt,
+                           *weatherAmt, *weatherRate, *weatherMood;
     } raw {};
 
     struct LaneRaw

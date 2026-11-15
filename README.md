@@ -78,6 +78,25 @@ chosen at random), and a grain can get more than one. *Filter* low-pass, with *C
 grain gets a slightly different cutoff) and *Reso* · *Crush* bit and sample-rate reduction, with
 *Amount* · *Drive* saturation, with *Amount*.
 
+**Shape** - the shape (envelope) of the grains, in every lane. *Shape* picks it: *Swell* rises
+slowly and falls fast, *Twin* has two humps, *Tremolo* pulses, *Pluck* starts sharp and fades,
+*Random* picks one for each grain · *Chance* how many grains get it (0 = all keep the usual soft
+window, 1 = all get the chosen shape). Every shape has the same loudness as the usual window.
+
+**Morph** - an XY pad with lanes *1-4* on the corners (1 and 2 at the top, 3 and 4 at the
+bottom): the point crossfades the lanes' levels, so the closer it is to a corner, the louder that
+lane. The blend keeps the overall loudness steady and only counts lanes that hold a sample; on the
+corner of an empty lane nothing changes. *Amount* how much the pad counts (0 = lanes play as set,
+1 = fully the pad's mix). Each corner glows with its lane's current level. Double-click the pad to
+go back to the middle. The point is two parameters (*Morph X*, *Morph Y*), so it can be automated.
+
+**Weather** - a slow weather that moves *Density*, *Spray* and *Size* of every lane and the tape
+*Tone* on its own, with slow changes and quicker gusts. The knobs stay where they are: the weather
+works on top of them, so it does not fight Live's automation. *Amount* how much it moves (0 = off)
+· *Rate* length of one slow cycle, 30 s to 20 minutes · *Mood*: *Calm* thins out and darkens,
+*Breeze* moves gently, *Storm* thickens and brightens with gusts, *Changing* drifts from calm to
+storm by itself. The strip under *Mood* shows the sky right now.
+
 **Drift** - note generator: a random walk on the chosen scale. *Rate* step (synced to Live's
 tempo) · *Chance* probability of a note at each step · *Root / Scale* key · *Octave / Range*
 register and span · *Length* note length in steps.
@@ -90,7 +109,8 @@ The samples of the four lanes are saved with the Live project: files as a path, 
 the set (FLAC).
 
 Sets saved with earlier versions open and sound as before: their sample is in lane 1, with a
-single voice and no per-grain effects. The window can be resized by dragging its bottom-right
+single voice and no per-grain effects; Shape, Morph and Weather start off, and until they are
+turned up the sound is identical to before. The window can be resized by dragging its bottom-right
 corner.
 
 ## Development

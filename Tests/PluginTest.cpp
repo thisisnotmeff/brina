@@ -81,11 +81,20 @@ static void checkOldParameters (BrinaProcessor& p, bool fx)
         tail = tail && params[i]->getVersionHint() > 1;
 
     auto raw = [&p] (const char* id) { auto* v = p.apvts.getRawParameterValue (id); return v != nullptr ? v->load() : -1.0f; };
-    // 10 for voices and per-grain effects, 12 controls for each of lanes 2-4, one Level per lane
-    check (tail && params.size() == (int) std::size (old) + 10 + 3 * 12 + 4
+    // 10 for voices and per-grain effects, 12 controls for each of lanes 2-4, one Level per lane,
+    // then 8 for grain shape, Morph and Weather
+    check (tail && params.size() == (int) std::size (old) + 10 + 3 * 12 + 4 + 8
                && raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-               && raw ("level") == 1.0f && raw ("level4") == 1.0f,
-           "new parameters appended; defaults: one voice, no effect, Level at maximum");
+               && raw ("level") == 1.0f && raw ("level4") == 1.0f
+               && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f && raw ("weatherAmt") == 0.0f,
+           "new parameters appended; defaults: one voice, no effect, Level at maximum, shape/morph/weather off");
+
+    // the version 2 parameters stay where they are: version 3 is appended after them
+    const int v2End = (int) std::size (old) + 10 + 3 * 12 + 4;
+    bool v3Last = params.size() > v2End;
+    for (int i = (int) std::size (old); i < params.size(); ++i)
+        v3Last = v3Last && params[i]->getVersionHint() == (i < v2End ? 2 : 3);
+    check (v3Last, "shape, Morph and Weather appended last, with version hint 3");
 
     // lanes 2-4 have the same controls as lane 1: same ranges and same defaults
     bool same = true;
@@ -222,6 +231,41 @@ int main (int argc, char** argv)
         }
         check (sawFirst && sawThird && ! sawOther, "grains read from lanes 1 and 3, not from the empty ones");
 
+        // grain shape: Random on every grain
+        setParam ("grainShape", 1.0f); setParam ("shapeChance", 1.0f);
+        check (p.apvts.getRawParameterValue ("grainShape")->load() == 4.0f && render (p, 2.0, false) > 0.003,
+               "Random shape on every grain: it plays");
+
+        // Morph on lane 3's corner (bottom left): lane 1 is silenced, so only lane 3 spawns grains
+        setParam ("morphAmt", 1.0f); setParam ("morphX", 0.0f); setParam ("morphY", 0.0f);
+        render (p, 1.0, false);
+        bool onlyThird = true, anyThird = false;
+        for (int i = 0; i < 40; ++i)
+        {
+            render (p, 0.05, false);
+            for (auto& v : p.engine.grainVis)
+            {
+                const float g = v.load();
+                if (g < 0.0f) continue;
+                // grains born before the change fade within Size (220 ms): after 1 s only new ones remain
+                onlyThird = onlyThird && (int) g == 2;
+                anyThird = anyThird || (int) g == 2;
+            }
+        }
+        check (onlyThird && anyThird && p.engine.morphVis[0].load() == 0.0f && p.engine.morphVis[2].load() > 1.0f,
+               "Morph on lane 3's corner: only lane 3 plays");
+        setParam ("morphAmt", 0.0f); setParam ("morphX", 0.5f); setParam ("morphY", 0.5f);
+
+        // Weather: the knobs do not move, the engine does
+        check (p.engine.weatherVis.load() < 0.0f, "Weather off: no intensity");
+        setParam ("weatherAmt", 1.0f); setParam ("weatherMood", 2.0f / 3.0f);   // Storm
+        const float densityBefore = p.apvts.getRawParameterValue ("density")->load();
+        check (render (p, 3.0, false) > 0.003 && p.engine.weatherVis.load() >= 0.0f
+                   && p.apvts.getRawParameterValue ("density")->load() == densityBefore
+                   && p.apvts.getRawParameterValue ("weatherMood")->load() == 2.0f,
+               "Weather in a storm: it plays, the knobs stay where they are");
+        setParam ("weatherAmt", 0.5f);
+
         p.triggerKill(); render (p, 0.05, false);   // release the held note
         p.triggerKill(); render (p, 0.05, false);   // and the Kill parameter goes back to 0
         setParam ("gfxFilter", 0.0f); setParam ("gfxDrive", 0.0f);
@@ -270,6 +314,11 @@ int main (int argc, char** argv)
                    && std::abs (p.apvts.getRawParameterValue ("pitch")->load() - 12.0f) < 0.01f
                    && std::abs (p.apvts.getRawParameterValue ("pitch2")->load()) < 0.01f,
                "voices, per-grain effects and every lane's controls restored");
+        check (p.apvts.getRawParameterValue ("grainShape")->load() == 4.0f
+                   && std::abs (p.apvts.getRawParameterValue ("shapeChance")->load() - 1.0f) < 1e-4f
+                   && std::abs (p.apvts.getRawParameterValue ("weatherAmt")->load() - 0.5f) < 1e-4f
+                   && p.apvts.getRawParameterValue ("weatherMood")->load() == 2.0f,
+               "grain shape and Weather restored");
 
         // restoring the same state twice leaves nothing behind; saving it again gives the same result
         p.loadFile (wav2, 3);
@@ -290,7 +339,7 @@ int main (int argc, char** argv)
         // the UI at the default size and at the minimum size
         for (auto [w, h, name] : std::initializer_list<std::tuple<int, int, const char*>> {
                  { BrinaEditor::defaultWidth, BrinaEditor::defaultHeight, fx ? "brina_fx.png" : "brina.png" },
-                 { 1060, 660, fx ? "brina_fx_small.png" : "brina_small.png" } })
+                 { BrinaEditor::minWidth, BrinaEditor::minHeight, fx ? "brina_fx_small.png" : "brina_small.png" } })
         {
             editor->setSize (w, h);
             for (int i = 0; i < 5; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
@@ -328,6 +377,9 @@ int main (int argc, char** argv)
         p.apvts.getParameter ("gfxDrive")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("pitch4")->setValueNotifyingHost (1.0f);
         p.apvts.getParameter ("level2")->setValueNotifyingHost (0.0f);
+        p.apvts.getParameter ("shapeChance")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("morphAmt")->setValueNotifyingHost (1.0f);
+        p.apvts.getParameter ("weatherAmt")->setValueNotifyingHost (1.0f);
         p.setStateInformation (oldState.getData(), (int) oldState.getSize());
 
         auto raw = [&p] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
@@ -336,8 +388,10 @@ int main (int argc, char** argv)
                    && slotLength (p, 0) == 96000,
                "previous-version set: parameters and sample in place");
         check (raw ("voices") == 1.0f && raw ("gfxFilter") == 0.0f && raw ("gfxCrush") == 0.0f && raw ("gfxDrive") == 0.0f
-                   && near ("pitch4", 0.0f) && near ("level2", 1.0f) && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
-               "previous-version set: one voice, no effect, lanes 2-4 empty");
+                   && near ("pitch4", 0.0f) && near ("level2", 1.0f)
+                   && raw ("shapeChance") == 0.0f && raw ("morphAmt") == 0.0f && raw ("weatherAmt") == 0.0f
+                   && slotLength (p, 1) == 0 && slotLength (p, 2) == 0 && slotLength (p, 3) == 0,
+               "previous-version set: one voice, no effect, lanes 2-4 empty, shape/morph/weather off");
         p.apvts.getParameter ("genProb")->setValueNotifyingHost (1.0f);
         check (render (p, 5.0, false) > 0.003, "previous-version set: it plays");
     }
