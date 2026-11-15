@@ -156,7 +156,7 @@ void WaveformView::paint (juce::Graphics& g)
             g.fillRect ((float) x, top, 1.0f, juce::jmax (1.0f, bottom - top));
         }
 
-        // i grani di questa corsia (il valore e' corsia + posizione)
+        // this lane's grains (the value is lane + position)
         g.setColour (ui::text.withAlpha (0.8f));
         for (auto& vis : proc.engine.grainVis)
         {
@@ -165,7 +165,7 @@ void WaveformView::paint (juce::Graphics& g)
                 g.fillRect (p * w - 0.75f, 3.0f, 1.5f, h - 6.0f);
         }
 
-        // i punti di lettura delle altre voci, aperti a ventaglio attorno alla posizione
+        // the read points of the other voices, fanned out around the position
         const int voices = juce::roundToInt (proc.apvts.getRawParameterValue ("voices")->load());
         const float fan = proc.apvts.getRawParameterValue ("voiceSpread")->load() * 0.5f;
 
@@ -237,7 +237,7 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     killButton.onClick = [this] { proc.triggerKill(); };
     addAndMakeVisible (killButton);
 
-    // --- posizione: Auto (scorre con Scan) oppure Fixed (ferma su Position), per tutte le corsie
+    // --- position: Auto (moves with Scan) or Fixed (stays on Position), for all lanes
     positionButton.setClickingTogglesState (true);
     positionButton.setColour (juce::TextButton::buttonColourId, ui::background);
     positionButton.setColour (juce::TextButton::buttonOnColourId, ui::warm);
@@ -250,7 +250,7 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
     statusLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLabel);
 
-    // --- le corsie
+    // --- lanes
     static const char* laneTitles[] { "Position", "Spray", "Size", "Density", "Pitch", "Detune", "Octaves",
                                       "Reverse", "Spread", "Scan", "Attack", "Release", "Level" };
     jassert (BrinaProcessor::laneParamBases().size() == (int) std::size (laneTitles));
@@ -292,7 +292,7 @@ BrinaEditor::BrinaEditor (BrinaProcessor& p)
         lane->knobs.back()->slider.setTooltip ("Volume della corsia " + juce::String (i + 1));
     }
 
-    // --- sezioni comuni a tutte le corsie
+    // --- sections shared by all lanes
     for (auto [id, title] : std::initializer_list<std::pair<const char*, const char*>> {
              { "voices", "Voices" }, { "voiceSpread", "Spread" },
              { "gfxFilter", "Filter" }, { "gfxFilterFreq", "Cutoff" }, { "gfxFilterRes", "Reso" },
@@ -437,7 +437,7 @@ void BrinaEditor::resized()
     sections.clear();
     dividers.clear();
 
-    // --- intestazione
+    // --- header
     auto header = area.removeFromTop (46).reduced (0, 9);
     header.removeFromLeft (214);    // titolo
     playButton.setBounds (header.removeFromLeft (72));
@@ -456,7 +456,7 @@ void BrinaEditor::resized()
 
     auto content = [] (juce::Rectangle<int> section) { return section.withTrimmedTop (22).reduced (6, 4); };
 
-    // --- le corsie: a sinistra il campione, a destra i dodici controlli dei grani e il volume
+    // --- lanes: the sample on the left, the twelve grain controls and the level on the right
     const int laneHeight = (area.getHeight() - laneGap * (lanes.size() - 1)) / lanes.size();
 
     for (auto* lane : lanes)
@@ -488,14 +488,14 @@ void BrinaEditor::resized()
 
         for (int k = 0; k < count; ++k)
         {
-            if (k == count - 1)     // un filo prima del volume della corsia
+            if (k == count - 1)     // a thin line before the lane level
                 dividers.push_back ({ inner.getX() - 1, inner.getY() + 8, 1, inner.getHeight() - 16 });
 
             placeKnob (*lane->knobs[(size_t) k], inner.removeFromLeft (cell));
         }
     }
 
-    // --- Voices + Grain FX + Out, comuni a tutte le corsie
+    // --- Voices + Grain FX + Out, shared by all lanes
     {
         auto row = middleRow;
         const float unit = (float) (row.getWidth() - 2 * gap) / 13.0f;
@@ -529,7 +529,7 @@ void BrinaEditor::resized()
 
             for (int i = 0; i < (int) std::size (ids); ++i)
             {
-                if (i == 3 || i == 5)   // un filo tra filtro, crush e drive
+                if (i == 3 || i == 5)   // a thin line between filter, crush and drive
                     dividers.push_back ({ inner.getX(), inner.getY() + 6, 1, inner.getHeight() - 12 });
 
                 placeKnob (knob (ids[i]), inner.removeFromLeft (cell));
@@ -554,7 +554,7 @@ void BrinaEditor::resized()
             auto inner = content (drift);
             driftButton.setBounds (inner.removeFromLeft (juce::roundToInt (unit)).withSizeKeepingCentre (56, 24));
 
-            // Scale ha i nomi piu' lunghi ("Penta Maj", "Whole Tone"): le do piu' spazio
+            // Scale has the longest names ("Penta Maj", "Whole Tone"): give it more room
             for (auto [id, units] : std::initializer_list<std::pair<const char*, float>> {
                      { "genRate", 1.3f }, { "genRoot", 1.0f }, { "genScale", 2.5f } })
                 placeChoice (choice (id), inner.removeFromLeft (juce::roundToInt (unit * units)).reduced (4, 0));
@@ -609,7 +609,7 @@ void BrinaEditor::timerCallback()
         lane.rec.setButtonText (recHere ? "Stop" : "Rec");
         lane.clear.setEnabled (s != nullptr);
 
-        // una corsia vuota resta regolabile, ma si vede che non suona
+        // an empty lane can still be adjusted, but it looks inactive
         if (full != lane.wasFull)
         {
             lane.wasFull = full;
@@ -621,7 +621,7 @@ void BrinaEditor::timerCallback()
             }
         }
 
-        lane.knobs[9]->slider.setEnabled (! fixed);     // Scan non ha effetto a posizione fissa
+        lane.knobs[9]->slider.setEnabled (! fixed);     // Scan has no effect with a fixed position
     }
 
     if (repaintLanes)
@@ -630,7 +630,7 @@ void BrinaEditor::timerCallback()
     playButton.setButtonText (playButton.getToggleState() ? "Playing" : "Stopped");
     positionButton.setButtonText (fixed ? "Position: Fixed" : "Position: Auto");
 
-    // --- i controlli che al momento non hanno effetto si spengono
+    // --- controls that currently have no effect are disabled
     auto value = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
     const bool multi = juce::roundToInt (value ("voices")) > 1;
     knob ("voiceSpread").slider.setEnabled (multi);
@@ -678,14 +678,14 @@ void BrinaEditor::filesDropped (const juce::StringArray& files, int x, int y)
 {
     setDragLane (-1);
 
-    // fuori dalle corsie: la prima corsia vuota (o la prima, se sono tutte piene)
+    // outside the lanes: the first empty lane (or the first lane, if all are full)
     int first = laneAt (x, y);
     for (int i = 0; first < 0 && i < lanes.size(); ++i)
         if (proc.getSample (i) == nullptr)
             first = i;
     first = juce::jmax (0, first);
 
-    // piu' file insieme riempiono le corsie una dopo l'altra
+    // several files at once fill the lanes one after another
     for (int i = 0; i < files.size() && first + i < BrinaProcessor::numSlots; ++i)
     {
         load (juce::File (files[i]), first + i);

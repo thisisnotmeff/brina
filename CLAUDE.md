@@ -7,9 +7,9 @@ Ambient granular plugin for Ableton Live (macOS), inspired by GrainBrick.
 - Everything in this repository is in English: documentation, code comments, commit messages, PR descriptions. Existing Italian comments and docs are being translated gradually; write all new text in English.
 
 ## Layout
-- `Source/Engine.h` — all the DSP (grains, Drift note generator, tape, delay, shimmer reverb). Host-independent: no dependency on `AudioProcessor`.
-- `Source/PluginProcessor.*` — parameters (`createLayout`), MIDI, file loading, recording (FX only, max 60 s), state saving.
-- `Source/PluginEditor.*` — UI (clickable waveform; Grains / Drift / Tape / Delay / Reverb / Out sections).
+- `Source/Engine.h` — all the DSP (four grain lanes, multigrain voices, per-grain effects, Drift note generator, tape, delay, shimmer reverb). Host-independent: no dependency on `AudioProcessor`.
+- `Source/PluginProcessor.*` — parameters (`createLayout`), MIDI, file loading per lane, recording (FX only, max 60 s), state saving.
+- `Source/PluginEditor.*` — UI: four lanes (clickable waveform, Load / Rec / Clear, twelve grain controls + Level each), then the shared Voices / Grain FX / Out / Drift / Tape / Delay / Reverb sections. Resizable window.
 - `Tests/EngineTest.cpp` (engine, no host) and `Tests/PluginTest.cpp` (plugin, run for both Brina and Brina FX).
 - Two plugins from the same code, selected by `BRINA_FX` (0 = instrument "Brina", 1 = effect "Brina FX").
 
@@ -26,16 +26,15 @@ Ambient granular plugin for Ableton Live (macOS), inspired by GrainBrick.
 
 ## Hard rules
 1. **Audio thread**: no allocation, no blocking locks, no I/O. Sample hand-off uses only `SpinLock::ScopedTryLockType` (if the lock is busy, retry on the next block). Buffers are sized in `prepare` (`Engine::maxBlock = 2048`).
-2. **Parameter compatibility**: IDs, order, ranges and defaults of existing parameters never change (it would break saved Live sets). New features are appended **at the end** of `createLayout`, with `ParameterID { id, 1 }`, and also at the end of the `raw` array. See `docs/parametri.md`.
+2. **Parameter compatibility**: IDs, order, ranges and defaults of existing parameters never change (it would break saved Live sets). New features are appended **at the end** of `createLayout`, with a version hint higher than the original parameters' (currently `ParameterID { id, 2 }`; JUCE requires this for Audio Units). See `docs/parametri.md`.
 3. **Saved state**: `getStateInformation` / `setStateInformation` must keep loading old sets (missing parameters fall back to defaults).
 4. **Tests**: they must pass before every change. A new feature comes with a test (engine → `EngineTest.cpp`, parameters/state → `PluginTest.cpp`).
-5. `Engine.h` stays host-independent. Current limits: 12 voices, 160 grains.
+5. `Engine.h` stays host-independent. Current limits: 12 notes, 4 lanes, 8 grain voices, 512 grains (160 with one lane and one voice, as in version 1).
 6. Claude cannot judge how it sounds: for DSP, check numerically peak, RMS, finite values (NaN/inf), denormals, feedback stability and tuning; the maintainer listens in Live.
 
 ## Conventions
 - One branch per feature, small commits. Never work directly on `main`.
-- Update `README.md` ("Come si usa" section) and `docs/parametri.md` whenever a parameter changes.
+- Update `README.md` ("How to use" section) and `docs/parametri.md` whenever a parameter changes.
 
 ## Future ideas
-- Requested features: multigrain, per-grain effects.
 - iPad app for iOS 12.5.8: must be built with Xcode 16, manual install only.

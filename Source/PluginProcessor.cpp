@@ -38,8 +38,8 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
         return r;
     };
 
-    // Il numero di versione dei parametri: quelli aggiunti dopo la prima uscita ne prendono uno piu'
-    // alto, cosi' negli Audio Unit finiscono in coda e l'ordine di quelli vecchi non cambia.
+    // Parameter version hint: parameters added after the first release get a higher one, as JUCE
+    // requires for Audio Units, so they are appended and the existing order does not change.
     int version = 1;
 
     auto add = [&layout, &version] (const juce::String& id, const juce::String& name, Range range, float def, const char* unit = "")
@@ -63,7 +63,7 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
         layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { id, version }, name, lo, hi, def));
     };
 
-    // I controlli dei grani, uguali per ogni corsia. Quelli della corsia 1 sono i parametri di sempre.
+    // The grain controls, the same for every lane. Lane 1's are the original parameters.
     auto addLane = [&] (int lane)
     {
         const juce::String n = lane == 0 ? juce::String() : " " + juce::String (lane + 1);
@@ -115,9 +115,9 @@ APVTS::ParameterLayout BrinaProcessor::createLayout()
     layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "kill", 1 }, "Kill", false));
     addChoice ("posMode", "Position Mode", juce::StringArray { "Auto", "Fixed" }, 0);
 
-    // --- Multigrain, effetti per grano e corsie 2-4. Con i valori di default (una voce, nessun
-    // effetto, corsie 2-4 vuote) il suono e' quello di prima: i set salvati senza questi parametri
-    // non cambiano.
+    // --- Multigrain, per-grain effects and lanes 2-4. With the defaults (one voice, no effect,
+    // lanes 2-4 empty) the sound is the same as before: sets saved without these parameters
+    // do not change.
     version = 2;
     addInt ("voices", "Grain Voices", 1, brina::Engine::maxGrainVoices, 1);
     add ("voiceSpread", "Voice Spread", Range (0.0f, 1.0f), 0.3f);
@@ -412,7 +412,7 @@ void BrinaProcessor::startRecording (int slot)
     if (! hasAudioInput() || ! juce::isPositiveAndBelow (slot, numSlots))
         return;
 
-    recording.store (false);    // se stava registrando in un altro slot, quello si ferma qui
+    recording.store (false);    // if it was recording into another lane, that stops here
 
     brina::SampleData::Ptr s = new brina::SampleData();
     s->buffer.setSize (2, (int) (maxRecordSeconds * hostSampleRate));
@@ -442,8 +442,8 @@ void BrinaProcessor::triggerKill()
 }
 
 //==============================================================================
-// Lo slot 1 usa gli attributi di sempre ("samplePath", "recording"): i set salvati con le versioni
-// precedenti si aprono identici. Gli altri slot aggiungono il numero: "samplePath2", "recording2"...
+// Lane 1 uses the original attributes ("samplePath", "recording"): sets saved with earlier
+// versions open unchanged. The other lanes append their number: "samplePath2", "recording2"...
 static juce::String slotAttribute (const char* name, int slot)
 {
     return slot == 0 ? juce::String (name) : juce::String (name) + juce::String (slot + 1);
@@ -464,7 +464,7 @@ void BrinaProcessor::saveSlot (juce::XmlElement& xml, int slot)
     }
     else if (length > 0)
     {
-        // le registrazioni viaggiano dentro il progetto di Live, compresse in FLAC
+        // recordings travel inside the Live set, compressed as FLAC
         juce::MemoryBlock data;
         {
             juce::FlacAudioFormat flac;
@@ -526,8 +526,8 @@ void BrinaProcessor::restoreSlot (int slot, const juce::String& path, const juce
         }
     }
 
-    // Niente da caricare. Lo slot 1 resta com'era (come nelle versioni precedenti); gli altri
-    // tornano vuoti, cosi' lo stato ripristinato e' esattamente quello salvato.
+    // Nothing to load. Lane 1 stays as it was (as in earlier versions); the others are emptied, so
+    // the restored state is exactly the saved one.
     if (slot > 0 && getSample (slot) != nullptr)
         clearSlot (slot);
 }
@@ -549,7 +549,7 @@ void BrinaProcessor::setStateInformation (const void* data, int size)
         xml->removeAttribute (slotAttribute ("recording", slot));
     }
 
-    xml->removeAttribute ("uiSlot");     // scritto da una versione di prova, non serve piu'
+    xml->removeAttribute ("uiSlot");     // written by a test build, no longer used
 
     juce::StringArray saved;
     for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
@@ -557,8 +557,8 @@ void BrinaProcessor::setStateInformation (const void* data, int size)
 
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
 
-    // I parametri che lo stato non conosce (aggiunti dopo che e' stato salvato) tornano al default,
-    // invece di restare dove sono: cosi' un set o un preset vecchio suona come quando e' stato salvato.
+    // Parameters the state does not know (added after it was saved) go back to their default instead
+    // of staying where they are: an old set or preset sounds as it did when it was saved.
     for (auto* param : getParameters())
         if (auto* withId = dynamic_cast<juce::AudioProcessorParameterWithID*> (param))
             if (! saved.contains (withId->paramID))

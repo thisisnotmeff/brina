@@ -9,13 +9,13 @@ class BrinaProcessor : public juce::AudioProcessor
 public:
     static constexpr double maxRecordSeconds = 60.0;
     static constexpr double maxFileSeconds = 300.0;
-    static constexpr int numSlots = brina::Engine::numSlots;   // corsie, una sorgente audio ciascuna
+    static constexpr int numSlots = brina::Engine::numSlots;   // lanes, one audio source each
 
-    /** I controlli dei grani di ogni corsia, nell'ordine dell'interfaccia. */
+    /** The grain controls of every lane, in UI order. */
     static const juce::StringArray& laneParamBases();
 
-    /** ID del parametro di una corsia: la corsia 1 usa gli ID di sempre ("position"), le altre il
-        numero in coda ("position2", "position3"...). */
+    /** Parameter ID for a lane: lane 1 keeps the original IDs ("position"), the others append
+        their number ("position2", "position3"...). */
     static juce::String laneParamId (const juce::String& base, int lane);
 
     BrinaProcessor();
@@ -47,8 +47,8 @@ public:
     //==========================================================================
     static bool hasAudioInput();
 
-    /** Le corsie sono numSlots, ognuna con il suo campione; "slot" va da 0 a numSlots - 1. Senza
-        indicarlo si usa la prima, che e' il campione unico delle versioni precedenti.
+    /** There are numSlots lanes, each with its own sample; "slot" goes from 0 to numSlots - 1. When
+        omitted it is the first lane, which holds the single sample of earlier versions.
 
         Thread dei messaggi. Restituisce un messaggio d'errore, vuoto se e' andata bene. */
     juce::String loadFile (const juce::File&, int slot = 0);
@@ -77,15 +77,15 @@ private:
     juce::AudioFormatManager formatManager;
 
     juce::SpinLock sampleLock;
-    std::array<brina::SampleData::Ptr, numSlots> current;      // protetto da sampleLock
+    std::array<brina::SampleData::Ptr, numSlots> current;      // guarded by sampleLock
     juce::ReferenceCountedArray<brina::SampleData> graveyard; // mai liberati dal thread audio
     juce::CriticalSection graveyardLock;
-    std::array<brina::SampleData::Ptr, numSlots> audioSample;  // usato solo dal thread audio
+    std::array<brina::SampleData::Ptr, numSlots> audioSample;  // used only by the audio thread
 
     std::atomic<bool> recording { false };
     std::atomic<int> recordSlot { 0 };
     double hostSampleRate = 44100.0;
-    bool lastKill = false;              // usato solo dal thread audio
+    bool lastKill = false;              // used only by the audio thread
     juce::AudioBuffer<float> inputCopy;
 
     struct Raw

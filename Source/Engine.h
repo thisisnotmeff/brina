@@ -26,20 +26,20 @@ struct SampleData : public juce::ReferenceCountedObject
 };
 
 //==============================================================================
-/** Le corsie: quattro granulatori, ognuno con il suo campione e i suoi controlli dei grani. */
+/** The lanes: four granulators, each with its own sample and its own grain controls. */
 constexpr int numLanes = 4;
 
-/** I controlli dei grani di una corsia. */
+/** The grain controls of one lane. */
 struct GrainParams
 {
     float position = 0.3f, spray = 0.1f, sizeMs = 180.0f, density = 18.0f;
     float pitch = 0.0f, detuneCents = 8.0f, octaves = 0.0f, reverse = 0.0f;
     float spread = 0.8f, scan = 0.0f, attackMs = 400.0f, releaseMs = 2500.0f;
-    float level = 1.0f;           // volume della corsia, 0..1
+    float level = 1.0f;           // lane level, 0..1
 };
 
-/** Tutti i parametri. I controlli dei grani ereditati sono quelli della corsia 1 (cosi' p.position,
-    p.spray... restano quelli di sempre); le corsie 2-4 sono in otherLanes. */
+/** All parameters. The inherited grain controls are lane 1's (so p.position, p.spray... keep
+    their old meaning); lanes 2-4 are in otherLanes. */
 struct Params : GrainParams
 {
     std::array<GrainParams, numLanes - 1> otherLanes {};
@@ -62,11 +62,11 @@ struct Params : GrainParams
     // Trasporto e modo della posizione
     bool  running = true;         // false: niente note ne' grani nuovi, le code sfumano da sole
     bool  fixedPosition = false;  // true: la posizione resta ferma su Position (Scan ignorato)
-    // Voci di grani (multigrain), comuni a tutte le corsie: a ogni nascita partono piu' grani insieme
+    // Grain voices (multigrain), shared by all lanes: several grains start together at each birth
     int   grainVoices = 1;        // 1..8
-    float voiceSpread = 0.3f;     // distanza tra i punti di lettura delle voci
-    int   voiceMode = 0;          // intervalli tra le voci, vedi voiceModeNames()
-    // Effetti per grano: probabilita' che un grano nasca con l'effetto, piu' i parametri dell'effetto
+    float voiceSpread = 0.3f;     // distance between the voices' read points
+    int   voiceMode = 0;          // intervals between voices, see voiceModeNames()
+    // Per-grain effects: probability that a grain is born with the effect, plus the effect's settings
     float gfxFilterChance = 0.0f, gfxFilterHz = 1500.0f, gfxFilterRes = 0.3f;
     float gfxCrushChance = 0.0f, gfxCrush = 0.5f;
     float gfxDriveChance = 0.0f, gfxDrive = 0.5f;
@@ -91,7 +91,7 @@ inline const juce::StringArray& voiceModeNames()
     return n;
 }
 
-/** Semitoni del grado \p degree (anche oltre l'ottava) nella scala \p scale di scaleNames(). */
+/** Semitones of \p degree (also past the octave) in scale \p scale of scaleNames(). */
 inline int scaleSemitones (int scale, int degree)
 {
     static const int scales[8][12] = {
@@ -165,17 +165,17 @@ private:
 class Engine
 {
 public:
-    static constexpr int maxVoices = 12;        // note suonate insieme
-    static constexpr int maxGrainVoices = 8;    // grani che nascono insieme per ogni nota (multigrain)
-    static constexpr int numSlots = numLanes;   // una sorgente audio per corsia
+    static constexpr int maxVoices = 12;        // notes played at once
+    static constexpr int maxGrainVoices = 8;    // grains born together for each note (multigrain)
+    static constexpr int numSlots = numLanes;   // one audio source per lane
     static constexpr int maxGrains = 512;
     static constexpr int numVis = 128;
     static constexpr int maxBlock = 2048;
 
-    /** Grani attivi, per l'interfaccia: corsia + posizione (0..1), cioe' 2.25 = terza corsia a un quarto.
-        -1 = vuoto. */
+    /** Active grains, for the UI: lane + position (0..1), so 2.25 = third lane, a quarter in.
+        -1 = empty. */
     std::array<std::atomic<float>, numVis> grainVis;
-    /** Scorrimento automatico (Scan) di ogni corsia, 0..1. */
+    /** Automatic scrolling (Scan) of each lane, 0..1. */
     std::array<std::atomic<float>, numLanes> scanVis;
 
     Engine()
@@ -227,8 +227,8 @@ public:
         lastReverbSize = lastReverbDamp = -1.0f;
     }
 
-    /** Fissa il seme dei numeri casuali: due motori con lo stesso seme e gli stessi parametri danno
-        la stessa uscita, campione per campione. Serve ai test; di norma il seme e' casuale. */
+    /** Sets the random seed: two engines with the same seed and the same parameters produce the
+        same output, sample for sample. Used by the tests; normally the seed is random. */
     void setRandomSeed (juce::int64 seed) { rng.setSeed (seed); }
 
     //==========================================================================
@@ -253,7 +253,7 @@ public:
                 if (v.age < target->age) target = &v;
         }
 
-        if (! (target->active && target->note == note))   // la stessa nota ripresa tiene i suoi inviluppi
+        if (! (target->active && target->note == note))   // the same note retriggered keeps its envelopes
             target->env.fill (0.0f);
 
         target->active = true;
@@ -286,7 +286,7 @@ public:
     }
 
     //==========================================================================
-    /** Un solo campione, nella prima corsia. */
+    /** A single sample, in the first lane. */
     void process (SampleData* sample, const float* inL, const float* inR,
                   float* outL, float* outR, int n, const Params& p, double bpm)
     {
@@ -294,8 +294,8 @@ public:
         processSlots (slots, inL, inR, outL, outR, n, p, bpm);
     }
 
-    /** slots: numSlots puntatori, uno per corsia, anche nullptr (corsia vuota). in* puo' essere
-        nullptr (strumento). in e out non devono sovrapporsi. n <= maxBlock. */
+    /** slots: numSlots pointers, one per lane, possibly nullptr (empty lane). in* may be nullptr
+        (instrument). in and out must not overlap. n <= maxBlock. */
     void processSlots (SampleData* const* slots, const float* inL, const float* inR,
                        float* outL, float* outR, int n, const Params& p, double bpm)
     {
@@ -303,7 +303,7 @@ public:
         std::fill (mixL.begin(), mixL.begin() + n, 0.0f);
         std::fill (mixR.begin(), mixR.begin() + n, 0.0f);
 
-        // --- corsie suonabili in questo blocco
+        // --- lanes that can play in this block
         numPlayable = 0;
 
         for (int s = 0; s < numSlots; ++s)
@@ -385,8 +385,8 @@ private:
         bool active = false, held = false;
         int note = 60;
         float vel = 1.0f;
-        std::array<float, numLanes> env {};          // inviluppo della nota, uno per corsia
-        std::array<double, numLanes> untilGrain {};  // campioni alla prossima nascita, per corsia
+        std::array<float, numLanes> env {};          // note envelope, one per lane
+        std::array<double, numLanes> untilGrain {};  // samples until the next birth, per lane
         int timed = -1;            // >0: nota del generatore, campioni rimasti
         juce::uint32 age = 0;
     };
@@ -402,11 +402,11 @@ private:
         float gainL = 0.0f, gainR = 0.0f;
         int remaining = 0, delay = 0;
 
-        // effetti del grano, decisi alla nascita (maschera di GrainFx)
+        // the grain's effects, chosen at birth (GrainFx mask)
         juce::uint8 fx = 0;
-        float fA1 = 0.0f, fA2 = 0.0f, fA3 = 0.0f, fGain = 1.0f;     // passa-basso a variabili di stato
+        float fA1 = 0.0f, fA2 = 0.0f, fA3 = 0.0f, fGain = 1.0f;     // state-variable low-pass
         float s1L = 0.0f, s2L = 0.0f, s1R = 0.0f, s2R = 0.0f;
-        float crushStep = 0.0f, crushInv = 0.0f, holdL = 0.0f, holdR = 0.0f;   // riduzione di bit + sample & hold
+        float crushStep = 0.0f, crushInv = 0.0f, holdL = 0.0f, holdR = 0.0f;   // bit reduction + sample & hold
         int holdLen = 1, holdLeft = 0;
         float driveK = 1.0f, driveMakeup = 1.0f;
     };
@@ -452,7 +452,7 @@ private:
     }
 
     //==========================================================================
-    /** Intervallo in semitoni della voce di grani k rispetto alla nota (la voce 0 resta sulla nota). */
+    /** Interval in semitones of grain voice k relative to the note (voice 0 stays on the note). */
     static float voiceInterval (int k, const Params& p)
     {
         static const float octaves[maxGrainVoices] = { 0, 12, -12, 24, 0, 12, -12, 24 };
@@ -462,19 +462,19 @@ private:
             return 0.0f;
 
         k = juce::jmin (k, maxGrainVoices - 1);
-        const float unison = (k & 1 ? 1.0f : -1.0f) * (float) ((k + 1) / 2) * 0.07f;   // +-7, 14, 21, 28 cent
+        const float unison = (k & 1 ? 1.0f : -1.0f) * (float) ((k + 1) / 2) * 0.07f;   // +-7, 14, 21, 28 cents
 
         switch (p.voiceMode)
         {
-            case 1:  return octaves[k] + (k >= 4 ? unison : 0.0f);         // i doppioni un filo stonati
+            case 1:  return octaves[k] + (k >= 4 ? unison : 0.0f);         // the duplicates slightly detuned
             case 2:  return fifths[k];
-            case 3:  return (float) scaleSemitones (p.genScale, 2 * k);    // terze sovrapposte sulla scala di Drift
+            case 3:  return (float) scaleSemitones (p.genScale, 2 * k);    // stacked thirds on the Drift scale
             default: return unison;
         }
     }
 
-    /** Una nascita: un grano per voce. La voce 0 parte subito, le altre si distribuiscono
-        nell'intervallo fino alla nascita successiva, cosi' la nuvola resta fitta e non pulsa. */
+    /** One birth: one grain per voice. Voice 0 starts right away, the others are spread over the
+        interval until the next birth, so the cloud stays dense and does not pulse. */
     void spawnGrains (const Voice& v, int lane, int offset, const Params& p, float norm, double interval)
     {
         const int count = juce::jlimit (1, maxGrainVoices, p.grainVoices);
@@ -488,8 +488,8 @@ private:
 
     void spawnGrain (const Voice& v, int lane, int k, int count, int offset, const Params& p, float norm)
     {
-        // Il tetto dei grani cresce con le voci e con le corsie che suonano: con una corsia e una voce
-        // e' quello di prima (stesso suono e stesso carico anche nei set piu' densi).
+        // The grain cap grows with the voices and with the lanes that play: with one lane and one voice
+        // it is the original one (same sound and same CPU load, even in the densest sets).
         const int limit = juce::jmin (maxGrains, (160 + 32 * (count - 1)) * juce::jmax (1, numPlayable));
 
         Grain* g = nullptr;
@@ -502,8 +502,8 @@ private:
         const SampleData& sample = *slotData[(size_t) lane];
         const int len = slotLen[(size_t) lane];
 
-        // Con una voce sola, solo la prima corsia e nessun effetto, i numeri casuali vengono estratti
-        // nello stesso ordine di prima: i set salvati suonano identici.
+        // With a single voice, only the first lane and no effects, random numbers are drawn in the
+        // same order as before: saved sets sound identical.
         float semis = (float) (v.note - 60) + gp.pitch + voiceInterval (k, p)
                     + (rng.nextFloat() * 2.0f - 1.0f) * gp.detuneCents * 0.01f;
 
@@ -516,7 +516,7 @@ private:
         double inc = std::pow (2.0, (double) semis / 12.0) * sample.sampleRate / sr;
         inc = juce::jlimit (0.02, 16.0, inc);
 
-        // le voci si aprono a ventaglio attorno a Position (-0.5 .. +0.5) e nello stereo
+        // voices fan out around Position (-0.5 .. +0.5) and across the stereo field
         const float fan = count > 1 ? (float) k / (float) (count - 1) - 0.5f : 0.0f;
 
         const int grainLen = juce::jmax (32, (int) (gp.sizeMs * 0.001 * sr));
@@ -555,14 +555,14 @@ private:
 
         if (p.gfxFilterChance > 0.0f && rng.nextFloat() < p.gfxFilterChance)
         {
-            // ogni grano filtrato ha un taglio un po' diverso (+-mezza ottava): suona piu' vivo
+            // each filtered grain gets a slightly different cutoff (+-half an octave): it sounds more alive
             const float hz = juce::jlimit (30.0f, 0.45f * (float) sr, p.gfxFilterHz * std::exp2 (rng.nextFloat() - 0.5f));
             const float k = 2.0f - 1.75f * juce::jlimit (0.0f, 1.0f, p.gfxFilterRes);
             const float gc = std::tan (juce::MathConstants<float>::pi * hz / (float) sr);
             g.fA1 = 1.0f / (1.0f + gc * (gc + k));
             g.fA2 = gc * g.fA1;
             g.fA3 = gc * g.fA2;
-            g.fGain = std::sqrt (k * 0.5f);   // compensa il picco della risonanza
+            g.fGain = std::sqrt (k * 0.5f);   // compensates the resonance peak
             g.s1L = g.s2L = g.s1R = g.s2R = 0.0f;
             g.fx |= fxFilter;
         }
@@ -570,7 +570,7 @@ private:
         if (p.gfxCrushChance > 0.0f && rng.nextFloat() < p.gfxCrushChance)
         {
             const float amount = juce::jlimit (0.0f, 1.0f, p.gfxCrush);
-            g.crushStep = 2.0f / std::exp2 (16.0f - 13.0f * amount);       // da 16 a 3 bit
+            g.crushStep = 2.0f / std::exp2 (16.0f - 13.0f * amount);       // from 16 down to 3 bits
             g.crushInv = 1.0f / g.crushStep;
             g.holdLen = 1 + juce::roundToInt (amount * amount * 24.0f * (float) sr / 44100.0f);
             g.holdLeft = 0;
@@ -586,15 +586,15 @@ private:
         }
     }
 
-    /** Arrotonda al gradino piu' vicino. I valori sono piccoli (|x| / step < 2^16), il cast basta. */
+    /** Rounds to the nearest step. Values are small (|x| / step < 2^16), so a cast is enough. */
     static float quantise (float x, float step, float inv)
     {
         const float q = x * inv;
         return (float) (int) (q + (q >= 0.0f ? 0.5f : -0.5f)) * step;
     }
 
-    /** Saturazione morbida, molto vicina a tanh ma senza funzioni lente: gira per ogni campione di
-        ogni grano. Arriva esattamente a +-1 per |x| >= 3. */
+    /** Soft clipper, very close to tanh but without slow functions: it runs for every sample of
+        every grain. Reaches exactly +-1 for |x| >= 3. */
     static float softClip (float x)
     {
         x = juce::jlimit (-3.0f, 3.0f, x);
@@ -602,7 +602,7 @@ private:
         return x * (27.0f + x2) / (27.0f + 9.0f * x2);
     }
 
-    /** Catena del grano: crush -> drive -> filtro. Viene prima della finestra, cosi' non fa click. */
+    /** Per-grain chain: crush -> drive -> filter. It runs before the window, so it never clicks. */
     static void grainFx (Grain& g, float& l, float& r)
     {
         if (g.fx & fxCrush)
@@ -644,7 +644,7 @@ private:
     void renderGrains (float* outL, float* outR, int n, const Params& p)
     {
         const bool canPlay = numPlayable > 0;
-        // piu' voci = piu' grani sovrapposti: il livello resta quello di una voce sola
+        // more voices = more overlapping grains: the level stays that of a single voice
         const float voicesNorm = 1.0f / std::sqrt ((float) juce::jlimit (1, maxGrainVoices, p.grainVoices));
 
         std::array<double, numLanes> interval;
@@ -660,10 +660,11 @@ private:
         }
 
         if (p.fixedPosition)
-            scanPhase.fill (0.0);   // posizione fissa: i grani nascono esattamente su Position
+            scanPhase.fill (0.0);   // fixed position: grains are born exactly on Position
 
-        // La prima corsia gira sempre (anche vuota consuma i suoi numeri casuali, come prima delle
-        // corsie); le altre solo se hanno un campione. Sono anche quelle che tengono viva una nota.
+        // The first lane always runs (even when empty it draws its random numbers, as before lanes
+        // existed); the others only when they hold a sample. These are also the lanes that keep a
+        // note alive.
         auto laneRuns = [this] (size_t L) { return L == 0 || playable[L]; };
 
         // --- voci: inviluppo e nascita dei grani
@@ -680,7 +681,7 @@ private:
                     v.timed = -1;
                 }
 
-                // inviluppi: ogni corsia ha il suo Attack e il suo Release
+                // envelopes: each lane has its own Attack and Release
                 bool alive = v.held;
 
                 for (size_t L = 0; L < (size_t) numLanes; ++L)
@@ -693,7 +694,7 @@ private:
                     alive = alive || (laneRuns (L) && v.env[L] > 0.0f);
                 }
 
-                if (! alive) { v = {}; break; }   // tutte le corsie hanno finito il Release
+                if (! alive) { v = {}; break; }   // every lane has finished its Release
 
                 for (size_t L = 0; L < (size_t) numLanes; ++L)
                 {
@@ -738,7 +739,7 @@ private:
             const int len = slotLen[(size_t) g.slot];
             const double dlen = (double) len;
 
-            // slot svuotato, oppure campione cambiato con uno piu' corto: il grano si spegne
+            // lane emptied, or sample replaced by a shorter one: the grain stops
             if (len < 256 || g.pos >= dlen) { g.active = false; continue; }
 
             const auto& buf = slotData[(size_t) g.slot]->buffer;
@@ -947,7 +948,7 @@ private:
     std::array<Voice, maxVoices> voices;
     std::array<Grain, maxGrains> grains;
 
-    // campioni delle corsie nel blocco in corso (validi solo dentro processSlots)
+    // lane samples for the current block (valid only inside processSlots)
     std::array<SampleData*, numSlots> slotData {};
     std::array<int, numSlots> slotLen {};
     std::array<bool, numSlots> playable {};

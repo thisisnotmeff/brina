@@ -13,7 +13,7 @@ const juce::Colour warm       { 0xffe8a87c };
 const juce::Colour text       { 0xffc8d3dc };
 const juce::Colour dim        { 0xff6f7d8a };
 
-/** Il colore di ogni corsia: forma d'onda, manopole e numero. */
+/** Each lane's colour: waveform, knobs and number. */
 inline juce::Colour laneColour (int lane)
 {
     static const juce::Colour colours[] { accent, warm, juce::Colour (0xffa8d59a), juce::Colour (0xffc3a6e8) };
@@ -31,7 +31,7 @@ public:
 };
 
 //==============================================================================
-/** Forma d'onda di una corsia, con posizione, zona di spray, voci e grani attivi. */
+/** One lane's waveform, with position, spray zone, voices and active grains. */
 class WaveformView : public juce::Component
 {
 public:
@@ -93,7 +93,7 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
     };
 
-    /** Una corsia: forma d'onda, Load / Rec / Clear e i suoi controlli dei grani. */
+    /** One lane: waveform, Load / Rec / Clear and its grain controls. */
     struct Lane
     {
         Lane (BrinaProcessor& p, int index) : wave (p, index) {}
@@ -101,7 +101,7 @@ private:
         WaveformView wave;
         juce::TextButton load { "Load" }, rec { "Rec" }, clear { "Clear" };
         juce::Label name;
-        std::vector<Knob*> knobs;           // nell'ordine di BrinaProcessor::laneParamBases()
+        std::vector<Knob*> knobs;           // in the order of BrinaProcessor::laneParamBases()
         juce::Rectangle<int> bounds, badge;
         bool wasFull = true;
     };
