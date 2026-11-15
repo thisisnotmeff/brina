@@ -1,78 +1,105 @@
 # Brina
 
-Strumento granulare ambient per Ableton Live (VST3 / AU, macOS). Trasforma un campione in
-texture che evolvono da sole. Ispirato alle funzioni di GrainBrick, scritto da zero.
+Ambient granular instrument for Ableton Live (VST3 / AU, macOS). It turns a sample into textures
+that evolve on their own. Inspired by the features of GrainBrick, written from scratch.
 
 ![Brina](screenshot.png)
 
-Sono due plugin con lo stesso motore:
+Two plugins share the same engine:
 
-| Plugin | Dove va | Sorgente audio |
+| Plugin | Where it goes | Audio source |
 |---|---|---|
-| **Brina** | traccia MIDI (strumento) | file audio |
-| **Brina FX** | traccia audio (effetto) | file audio oppure **Rec** dell'ingresso della traccia (max 60 s) |
+| **Brina** | MIDI track (instrument) | audio file |
+| **Brina FX** | audio track (effect) | audio file, or **Rec** of the track input (max 60 s) |
 
-## Installazione
+There are four audio sources, the **lanes**, all visible at once: each lane has its own sample
+and its own grain controls, like four granulators in the same plugin.
 
-**Senza compilare (GitHub):** carica questa cartella in un repository GitHub. La scheda *Actions*
-compila da sola e produce `Brina-macOS.zip`. Copia il contenuto di `VST3` in
-`~/Library/Audio/Plug-Ins/VST3/` e di `Components` in `~/Library/Audio/Plug-Ins/Components/`,
-poi sblocca i file scaricati dal Terminale:
+## Installation
+
+**Without compiling (GitHub):** push this folder to a GitHub repository. The *Actions* tab builds
+it and produces `Brina-macOS.zip`. Copy the contents of `VST3` into
+`~/Library/Audio/Plug-Ins/VST3/` and of `Components` into `~/Library/Audio/Plug-Ins/Components/`,
+then unblock the downloaded files from Terminal:
 
     xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/Brina*.vst3 ~/Library/Audio/Plug-Ins/Components/Brina*.component
 
-**Compilando sul Mac:** servono Xcode e CMake (`brew install cmake`). Doppio clic su
-`build_mac.command`: compila e installa i plugin nelle cartelle giuste.
+**Compiling on the Mac:** you need Xcode and CMake (`brew install cmake`). Double-click
+`build_mac.command`: it builds the plugins and installs them in the right folders.
 
-In Live: Impostazioni > Plug-Ins > attiva VST3 (e/o Audio Units) > *Rescan*.
+In Live: Settings > Plug-Ins > enable VST3 (and/or Audio Units) > *Rescan*.
 
-**Aggiornare a una versione nuova:** chiudi Live prima di sostituire i plugin. Se Live fa uno
-scan mentre i file vengono copiati, segna il plugin come non caricabile e non lo riprova più:
-i file dello zip hanno sempre la stessa data, quindi per Live non cambiano. Se Brina non compare
-dopo un aggiornamento, chiudi Live, aggiorna la data dei file (usa la cartella dove li hai
-installati; per `/Library/...` aggiungi `sudo` davanti) e riapri Live con *Rescan*:
+**Updating to a new version:** quit Live before replacing the plugins. If Live scans while the
+files are being copied, it marks the plugin as unloadable and never tries again: the files in the
+zip always have the same date, so to Live they have not changed. If Brina does not show up after
+an update, quit Live, refresh the files' date (use the folder you installed them in; for
+`/Library/...` prepend `sudo`) and reopen Live with *Rescan*:
 
     find ~/Library/Audio/Plug-Ins/VST3/Brina*.vst3 ~/Library/Audio/Plug-Ins/Components/Brina*.component -exec touch {} +
 
-## Come si usa
+## How to use
 
-1. Trascina un file audio sulla forma d'onda (o **Load**). In Brina FX puoi premere **Rec**
-   per catturare l'audio che passa nella traccia; mentre registri i grani suonano gia'.
-2. Con **Drift** acceso il plugin suona da solo. Spegnilo per suonare tu via MIDI
-   (Do3 = intonazione originale). Per mandare MIDI a Brina FX: crea una traccia MIDI e
-   imposta *MIDI To* sulla traccia audio.
-3. Clicca sulla forma d'onda per scegliere da dove nascono i grani.
-4. In alto: **Playing / Stopped** avvia e ferma il plugin (da fermo non nascono note ne' grani
-   e le code sfumano da sole); **Kill** fa silenzio subito, azzerando note, grani e code di
-   delay e riverbero. In Brina FX il segnale *Dry In* continua a passare in entrambi i casi.
-5. **Position: Auto / Fixed** (nella sezione Grains): in *Auto* la posizione scorre da sola alla
-   velocita' di *Scan* (come sempre); in *Fixed* resta ferma dove la metti.
+1. Drag an audio file onto a lane's waveform (or use its **Load**). In Brina FX you can press
+   **Rec** to capture the audio passing through the track into that lane; grains already play
+   while you record. Dragging several files at once fills the lanes one after another.
+   **Clear** empties the lane.
+2. With **Drift** on, the plugin plays by itself. Turn it off to play it over MIDI
+   (C3 = original pitch). To send MIDI to Brina FX: create a MIDI track and set its *MIDI To*
+   to the audio track.
+3. Click a lane's waveform to choose where its grains are born.
+4. At the top: **Playing / Stopped** starts and stops the plugin (when stopped no notes or grains
+   are born and the tails fade out on their own); **Kill** silences everything at once, clearing
+   notes, grains and the delay and reverb tails. In Brina FX the *Dry In* signal keeps passing
+   in both cases.
+5. **Position: Auto / Fixed** (at the top, for all lanes): in *Auto* the position moves on its
+   own at each lane's *Scan* speed (as always); in *Fixed* it stays where you put it.
 
-I tre comandi sono parametri (*Play*, *Kill*, *Position Mode*), quindi si possono automatizzare
-o mappare a un controller in Live. *Kill* scatta a ogni cambio di valore.
+The three controls are parameters (*Play*, *Kill*, *Position Mode*), so they can be automated or
+mapped to a controller in Live. *Kill* fires on every value change.
 
-**Grains** - *Position* punto di lettura · *Spray* dispersione attorno al punto · *Size* durata
-del grano · *Density* grani al secondo · *Pitch* trasposizione · *Detune* stonatura casuale ·
-*Octaves* probabilita' di grani a ±1 ottava · *Reverse* probabilita' di grani al contrario ·
-*Spread* apertura stereo · *Scan* velocita' con cui la posizione scorre da sola ·
-*Attack / Release* inviluppo delle note.
+**Lanes** - each with its own controls: *Position* read point · *Spray* scatter around the point ·
+*Size* grain length · *Density* grains per second · *Pitch* transposition · *Detune* random
+detuning · *Octaves* probability of grains at ±1 octave · *Reverse* probability of reversed
+grains · *Spread* stereo width · *Scan* speed at which the position moves on its own ·
+*Attack / Release* note envelope · *Level* lane volume. An empty lane does not play and its
+controls are dimmed, but it can be set up before loading the file.
 
-**Drift** - generatore di note: passeggiata casuale sulla scala scelta. *Rate* passo (legato al
-tempo di Live) · *Chance* probabilita' di una nota a ogni passo · *Root / Scale* tonalita' ·
-*Octave / Range* registro ed estensione · *Length* durata delle note in passi.
+The sections below the lanes apply to all of them.
 
-**Tape** saturazione, wow & flutter, filtro · **Delay** stereo incrociato, il tempo "scivola"
-come un nastro · **Reverb** con *Shimmer* (ottava sopra nel feedback) · **Out** *Dry In*
-(solo FX: segnale originale) e *Volume*.
+**Voices** (multigrain) - *Voices* how many grains are born together for each note, from 1 to 8:
+the voices fan out around *Position* and across the stereo field, while the level stays the
+same · *Spread* distance between the voices' read points · *Intervals* tuning of the voices:
+*Unison* (slightly detuned from each other), *Octaves*, *Fifths*, *Chord* (stacked thirds on the
+Drift scale).
 
-Il campione viene salvato col progetto di Live: i file come percorso, le registrazioni dentro
-il set (FLAC).
+**Grain FX** - effects applied to individual grains, not to the whole sound. For each one, the
+first control sets how many grains get it (0 = none, 1 = all; at half, about one grain in two,
+chosen at random), and a grain can get more than one. *Filter* low-pass, with *Cutoff* (each
+grain gets a slightly different cutoff) and *Reso* · *Crush* bit and sample-rate reduction, with
+*Amount* · *Drive* saturation, with *Amount*.
 
-## Sviluppo
+**Drift** - note generator: a random walk on the chosen scale. *Rate* step (synced to Live's
+tempo) · *Chance* probability of a note at each step · *Root / Scale* key · *Octave / Range*
+register and span · *Length* note length in steps.
+
+**Tape** saturation, wow & flutter, filter · **Delay** cross-fed stereo, the time "slides" like
+tape · **Reverb** with *Shimmer* (octave up in the feedback) · **Out** *Dry In* (FX only: the
+original signal) and *Volume*.
+
+The samples of the four lanes are saved with the Live project: files as a path, recordings inside
+the set (FLAC).
+
+Sets saved with earlier versions open and sound as before: their sample is in lane 1, with a
+single voice and no per-grain effects. The window can be resized by dragging its bottom-right
+corner.
+
+## Development
 
     cmake -S . -B build -DBRINA_INSTALL=OFF -DBRINA_TESTS=ON && cmake --build build
     ./build/BrinaTest_artefacts/Release/BrinaTest
+    ./build/BrinaPluginTest_artefacts/Release/BrinaPluginTest /tmp
+    ./build/BrinaFXPluginTest_artefacts/Release/BrinaFXPluginTest /tmp
 
-`Source/Engine.h` contiene tutto il DSP e non dipende dall'host. Costruito con
-[JUCE](https://juce.com) 8 (licenza AGPLv3 / commerciale: va bene per uso personale; per
-distribuire il plugin a codice chiuso serve una licenza JUCE).
+`Source/Engine.h` holds all the DSP and does not depend on the host. Built with
+[JUCE](https://juce.com) 8 (AGPLv3 / commercial license: fine for personal use; distributing the
+plugin closed-source requires a JUCE license). Parameter list: `docs/parametri.md`.

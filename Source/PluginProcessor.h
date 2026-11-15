@@ -9,6 +9,14 @@ class BrinaProcessor : public juce::AudioProcessor
 public:
     static constexpr double maxRecordSeconds = 60.0;
     static constexpr double maxFileSeconds = 300.0;
+    static constexpr int numSlots = brina::Engine::numSlots;   // lanes, one audio source each
+
+    /** The grain controls of every lane, in UI order. */
+    static const juce::StringArray& laneParamBases();
+
+    /** Parameter ID for a lane: lane 1 keeps the original IDs ("position"), the others append
+        their number ("position2", "position3"...). */
+    static juce::String laneParamId (const juce::String& base, int lane);
 
     BrinaProcessor();
     ~BrinaProcessor() override = default;
@@ -39,16 +47,21 @@ public:
     //==========================================================================
     static bool hasAudioInput();
 
-    /** Thread dei messaggi. Restituisce un messaggio d'errore, vuoto se e' andata bene. */
-    juce::String loadFile (const juce::File&);
-    void startRecording();
+    /** There are numSlots lanes, each with its own sample; "slot" goes from 0 to numSlots - 1. When
+        omitted it is the first lane, which holds the single sample of earlier versions.
+
+        Thread dei messaggi. Restituisce un messaggio d'errore, vuoto se e' andata bene. */
+    juce::String loadFile (const juce::File&, int slot = 0);
+    void clearSlot (int slot);
+    void startRecording (int slot = 0);
     void stopRecording();
     bool isRecording() const { return recording.load(); }
+    int getRecordingSlot() const { return recordSlot.load(); }
 
     /** Kill: silenzio immediato, azzera note, grani e code degli effetti. */
     void triggerKill();
 
-    brina::SampleData::Ptr getSample();
+    brina::SampleData::Ptr getSample (int slot = 0);
     juce::String getFormatWildcard() { return formatManager.getWildcardForAllFormats(); }
 
     juce::AudioProcessorValueTreeState apvts;
@@ -56,31 +69,41 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
-    void setSample (brina::SampleData::Ptr);
+    void setSample (int slot, brina::SampleData::Ptr);
     void readParams (brina::Params&) const;
+    void saveSlot (juce::XmlElement&, int slot);
+    void restoreSlot (int slot, const juce::String& path, const juce::String& recordingData);
 
     juce::AudioFormatManager formatManager;
 
     juce::SpinLock sampleLock;
-    brina::SampleData::Ptr current;    // protetto da sampleLock
+    std::array<brina::SampleData::Ptr, numSlots> current;      // guarded by sampleLock
     juce::ReferenceCountedArray<brina::SampleData> graveyard; // mai liberati dal thread audio
     juce::CriticalSection graveyardLock;
-    brina::SampleData::Ptr audioSample; // usato solo dal thread audio
+    std::array<brina::SampleData::Ptr, numSlots> audioSample;  // used only by the audio thread
 
     std::atomic<bool> recording { false };
+    std::atomic<int> recordSlot { 0 };
     double hostSampleRate = 44100.0;
-    bool lastKill = false;              // usato solo dal thread audio
+    bool lastKill = false;              // used only by the audio thread
     juce::AudioBuffer<float> inputCopy;
 
     struct Raw
     {
-        std::atomic<float> *position, *spray, *size, *density, *pitch, *detune, *octaves, *reverse,
-                           *spread, *scan, *attack, *release,
-                           *genOn, *genRate, *genProb, *genRoot, *genScale, *genOctave, *genRange, *genLength,
+        std::atomic<float> *genOn, *genRate, *genProb, *genRoot, *genScale, *genOctave, *genRange, *genLength,
                            *drive, *wow, *tone, *delayTime, *delayFeedback, *delayMix,
                            *reverbSize, *reverbDamp, *shimmer, *reverbMix, *dry, *volume,
-                           *play, *kill, *posMode;
+                           *play, *kill, *posMode,
+                           *voices, *voiceSpread, *voiceMode,
+                           *gfxFilter, *gfxFilterFreq, *gfxFilterRes, *gfxCrush, *gfxCrushAmt, *gfxDrive, *gfxDriveAmt;
     } raw {};
+
+    struct LaneRaw
+    {
+        std::atomic<float> *position, *spray, *size, *density, *pitch, *detune, *octaves, *reverse,
+                           *spread, *scan, *attack, *release, *level;
+    };
+    std::array<LaneRaw, numSlots> laneRaw {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BrinaProcessor)
 };
